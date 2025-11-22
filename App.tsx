@@ -4,7 +4,7 @@ import {
   Play, Settings, Trophy, Users, ArrowLeft, Check, X, Clock, 
   Thermometer, Mountain, Wind, Bird, History, Droplets, 
   Building2, Gift, BrainCircuit, Zap, Award, Lock, Lightbulb,
-  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft, Loader2, LogOut, Mail, User as UserIcon
+  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft, Loader2, LogOut, Mail, User as UserIcon, Download
 } from 'lucide-react';
 import { Category, Difficulty, GameConfig, GameResult, Question, PlayerAnswer, PlayerStats, LearningModule, LearningUnit, UserProgress, Flashcard, LearningQuiz, UserProfile, AVATARS } from './types';
 import Button from './components/Button';
@@ -412,6 +412,7 @@ const AuthScreen: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) =>
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [name, setName] = useState('');
     const [selectedAvatar, setSelectedAvatar] = useState('puffin');
     const [error, setError] = useState('');
@@ -501,7 +502,14 @@ const AuthScreen: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) =>
                         <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-1 ml-1">Password</label>
                         <div className="relative">
                             <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
-                            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:border-[#0057A0] transition" placeholder="••••••••" />
+                            <input type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-12 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:border-[#0057A0] transition" placeholder="••••••••" />
+                            <button 
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)} 
+                                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#0057A0] transition-colors"
+                            >
+                                {showPassword ? <EyeOff size={20}/> : <Eye size={20}/>}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1081,9 +1089,36 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         const u = await getAllUsers();
         setUsers(u);
     };
-    if (activeTab === 'users') fetchUsers();
+    if (activeTab === 'users' || activeTab === 'overview') fetchUsers();
 
   }, [activeTab]);
+
+  const handleExportCSV = () => {
+      const headers = ["Name", "Email", "Joined", "Total Games", "Total Score", "Avg Score", "Best Category"];
+      const rows = users.map(u => {
+          const userStats = stats.find(s => s.username === u.displayName) || { totalGames: 0, totalScore: 0, bestCategory: 'N/A' };
+          const avg = userStats.totalGames > 0 ? (userStats.totalScore / userStats.totalGames).toFixed(1) : "0";
+          return [
+              `"${u.displayName}"`,
+              `"${u.email}"`,
+              `"${new Date(u.createdAt).toLocaleDateString()}"`,
+              userStats.totalGames,
+              userStats.totalScore,
+              avg,
+              `"${userStats.bestCategory || 'N/A'}"`
+          ].join(",");
+      });
+
+      const csvContent = [headers.join(","), ...rows].join("\n");
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", "perlan_staff_report.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
 
   const handleDelete = async (id: string) => {
     if (window.confirm("Delete this question?")) {
@@ -1216,6 +1251,11 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         {/* OVERVIEW TAB */}
         {activeTab === 'overview' && (
            <div className="space-y-6 animate-fade-in">
+               <div className="flex justify-end">
+                   <Button onClick={handleExportCSV} size="sm" className="bg-[#30C050] border-green-600 shadow-md gap-2">
+                       <Download size={18} /> Download Report
+                   </Button>
+               </div>
                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                        <div className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Total Games</div>

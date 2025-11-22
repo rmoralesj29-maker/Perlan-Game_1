@@ -1,7 +1,7 @@
 
 import { GameResult, PlayerStats, Question, Category, Difficulty, LearningModule, UserProgress, UserProfile } from '../types';
 import { db } from '../firebaseConfig';
-import { collection, addDoc, doc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, getDocs, deleteDoc } from 'firebase/firestore/lite';
 
 const STORAGE_KEYS = {
   RESULTS: 'perlan_results',

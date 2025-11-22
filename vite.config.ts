@@ -11,7 +11,22 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      sourcemap: false
+      sourcemap: false,
+      // OPTIMIZATION: Code Splitting
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            // Split React core
+            vendor: ['react', 'react-dom', 'lucide-react'],
+            // Split Firebase (it's heavy)
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            // Split Charts
+            charts: ['recharts']
+          }
+        }
+      },
+      // Increase warning limit slightly to stop false alarms
+      chunkSizeWarningLimit: 1000
     }
   };
 });
