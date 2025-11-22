@@ -4,11 +4,11 @@ import {
   Play, Settings, Trophy, Users, ArrowLeft, Check, X, Clock, 
   Thermometer, Mountain, Wind, Bird, History, Droplets, 
   Building2, Gift, BrainCircuit, Zap, Award, Lock, Lightbulb,
-  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft
+  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft, Loader2
 } from 'lucide-react';
 import { Category, Difficulty, GameConfig, GameResult, Question, PlayerAnswer, PlayerStats, LearningModule, LearningUnit, UserProgress, Flashcard, LearningQuiz } from './types';
 import Button from './components/Button';
-import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules } from './services/storageService';
+import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules, deleteLearningModuleFromCloud, syncContentFromFirebase } from './services/storageService';
 import { generateQuestionsWithAI } from './services/geminiService';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart as RePie, Pie } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
@@ -856,9 +856,6 @@ const GameScreen: React.FC<{ config: GameConfig, onEnd: (result: GameResult) => 
 };
 
 const ResultScreen: React.FC<{ result: GameResult, onHome: () => void }> = ({ result, onHome }) => {
-  // ... (Existing ResultScreen code - same as provided in context)
-  // I am abbreviating this to save token space, but in a real apply, I would keep it all.
-  // Assuming ResultScreen logic is unchanged from user input.
   
   const percentage = Math.round((result.score / result.totalQuestions) * 100);
   const [expandedReview, setExpandedReview] = useState<boolean>(false);
@@ -984,20 +981,19 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setLearningModules(getLearningModules());
   }
 
-  const handleDeleteQuestion = (id: string) => {
+  const handleDeleteQuestion = async (id: string) => {
       if (confirm("Are you sure?")) {
-          deleteQuestion(id);
+          await deleteQuestion(id);
           setQuestions(getQuestions());
       }
   };
 
-  // ... (handleManualAdd, handleGenerate remain same as provided code)
-  const handleManualAdd = () => {
+  const handleManualAdd = async () => {
       if (!newQ.text || !newQ.options?.[0] || !newQ.options?.[1] || !newQ.options?.[2] || !newQ.fact) {
           alert("Please fill in all fields");
           return;
       }
-      addQuestion({
+      await addQuestion({
           id: uuidv4(),
           text: newQ.text,
           options: newQ.options,
@@ -1015,7 +1011,9 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setIsGenerating(true);
       try {
           const newQs = await generateQuestionsWithAI(genCategory, Difficulty.Medium, 5);
-          newQs.forEach(q => addQuestion(q));
+          for(const q of newQs) {
+            await addQuestion(q);
+          }
           setQuestions(getQuestions());
           alert(`Added ${newQs.length} new questions!`);
       } catch (e) {
@@ -1044,7 +1042,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const labelClasses = "block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1";
 
   // --- Learning Editor Logic ---
-  const handleCreateModule = () => {
+  const handleCreateModule = async () => {
       const newMod: LearningModule = {
           id: uuidv4(),
           category: Category.General,
@@ -1052,24 +1050,26 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           units: []
       };
       const updated = [...learningModules, newMod];
-      saveLearningModules(updated);
       setLearningModules(updated);
+      await saveLearningModules(updated);
       setEditingModuleId(newMod.id);
   };
 
-  const handleDeleteModule = (id: string) => {
+  const handleDeleteModule = async (id: string) => {
       if (confirm("Delete this entire module?")) {
         const updated = learningModules.filter(m => m.id !== id);
-        saveLearningModules(updated);
         setLearningModules(updated);
         if(editingModuleId === id) setEditingModuleId(null);
+        await deleteLearningModuleFromCloud(id);
+        await saveLearningModules(updated); // Saves the remaining array to local
       }
   }
 
-  const updateModule = (mod: LearningModule) => {
+  const updateModule = async (mod: LearningModule) => {
       const updated = learningModules.map(m => m.id === mod.id ? mod : m);
-      saveLearningModules(updated);
       setLearningModules(updated);
+      // We only need to save THIS module to the cloud
+      await saveLearningModules([mod]); 
   }
 
   const editingModule = learningModules.find(m => m.id === editingModuleId);
@@ -1480,6 +1480,18 @@ const App: React.FC = () => {
   const [gameConfig, setGameConfig] = useState<GameConfig | null>(null);
   const [lastResult, setLastResult] = useState<GameResult | null>(null);
   const [playerName, setPlayerName] = useState(""); 
+  
+  // NEW: Sync State
+  const [isSyncing, setIsSyncing] = useState(true);
+
+  // NEW: Trigger Sync on Load
+  useEffect(() => {
+    const init = async () => {
+      await syncContentFromFirebase();
+      setIsSyncing(false);
+    };
+    init();
+  }, []);
 
   const startGame = (config: GameConfig) => { 
     setPlayerName(config.username);
@@ -1491,6 +1503,15 @@ const App: React.FC = () => {
   const startLearning = () => {
     setView('learning');
   };
+
+  if (isSyncing) {
+      return (
+          <div className="min-h-screen flex flex-col items-center justify-center bg-[#0057A0] text-white">
+              <Loader2 size={48} className="animate-spin text-yellow-400 mb-4"/>
+              <p className="font-heading font-bold text-lg">Syncing with Cloud...</p>
+          </div>
+      )
+  }
 
   return (
     <div className="font-sans bg-gradient-to-b from-slate-900 via-[#003D73] to-[#0057A0] min-h-screen text-slate-800 selection:bg-perlan-light selection:text-white">
