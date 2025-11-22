@@ -1362,29 +1362,36 @@ const AdminDashboard: React.FC<{ onExit: () => void }> = ({ onExit }) => {
         {activeTab === 'questions' && (
             <div className="space-y-6 animate-fade-in">
                 {/* AI Generator */}
-                <div className="bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl p-8 text-white relative overflow-hidden shadow-lg z-30">
-                    <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><BrainCircuit size={120}/></div>
-                    <h3 className="text-2xl font-heading font-bold mb-2 relative z-10">AI Question Generator</h3>
-                    <p className="text-blue-200 mb-6 relative z-10 max-w-lg">Instantly generate scientifically accurate trivia questions for any category using Gemini AI.</p>
+                <div className="relative z-30 rounded-3xl shadow-lg">
+                    {/* Decoration Layer (Clipped) */}
+                    <div className="absolute inset-0 bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl overflow-hidden">
+                        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><BrainCircuit size={120}/></div>
+                    </div>
                     
-                    <div className="flex flex-col md:flex-row gap-4 relative z-10">
-                         <CustomSelect 
-                           value={aiPrompt.category} 
-                           options={Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))}
-                           onChange={(v) => setAiPrompt({...aiPrompt, category: v})}
-                           className="w-full md:w-64"
-                           zIndex={100}
-                         />
-                         <CustomSelect 
-                           value={aiPrompt.difficulty} 
-                           options={Object.values(Difficulty).map(d => ({ label: d, value: d }))}
-                           onChange={(v) => setAiPrompt({...aiPrompt, difficulty: v})}
-                           className="w-full md:w-48"
-                           zIndex={90}
-                         />
-                         <Button onClick={handleGenerateAI} disabled={isGenerating} className="shadow-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 border-yellow-600">
-                             {isGenerating ? <><Loader2 className="animate-spin" size={20}/> Generating...</> : <><Sparkles size={20}/> Generate 5 Questions</>}
-                         </Button>
+                    {/* Content Layer (Visible overflow for dropdowns) */}
+                    <div className="relative p-8 text-white">
+                        <h3 className="text-2xl font-heading font-bold mb-2">AI Question Generator</h3>
+                        <p className="text-blue-200 mb-6 max-w-lg">Instantly generate scientifically accurate trivia questions for any category using Gemini AI.</p>
+                        
+                        <div className="flex flex-col md:flex-row gap-4">
+                             <CustomSelect 
+                               value={aiPrompt.category} 
+                               options={Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))}
+                               onChange={(v) => setAiPrompt({...aiPrompt, category: v})}
+                               className="w-full md:w-64"
+                               zIndex={50}
+                             />
+                             <CustomSelect 
+                               value={aiPrompt.difficulty} 
+                               options={Object.values(Difficulty).map(d => ({ label: d, value: d }))}
+                               onChange={(v) => setAiPrompt({...aiPrompt, difficulty: v})}
+                               className="w-full md:w-48"
+                               zIndex={40}
+                             />
+                             <Button onClick={handleGenerateAI} disabled={isGenerating} className="shadow-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 border-yellow-600">
+                                 {isGenerating ? <><Loader2 className="animate-spin" size={20}/> Generating...</> : <><Sparkles size={20}/> Generate 5 Questions</>}
+                             </Button>
+                        </div>
                     </div>
                 </div>
 
