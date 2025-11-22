@@ -1,5 +1,5 @@
 
-import { GameResult, PlayerStats, Question, Category, Difficulty, LearningModule, UserProgress } from '../types';
+import { GameResult, PlayerStats, Question, Category, Difficulty, LearningModule, UserProgress, UserProfile } from '../types';
 import { db } from '../firebaseConfig';
 import { collection, addDoc, doc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
 
@@ -105,6 +105,26 @@ export const syncContentFromFirebase = async (): Promise<void> => {
   }
 };
 
+// --- User Profile Management (NEW) ---
+
+export const saveUserProfile = async (user: UserProfile): Promise<void> => {
+  try {
+    // Save to Cloud
+    await setDoc(doc(db, "users", user.uid), user, { merge: true });
+    console.log("User Profile Saved");
+  } catch (e) { console.error("Error saving user profile", e); }
+};
+
+export const getAllUsers = async (): Promise<UserProfile[]> => {
+  try {
+    const querySnapshot = await getDocs(collection(db, "users"));
+    return querySnapshot.docs.map(doc => doc.data() as UserProfile);
+  } catch (e) { 
+    console.error("Error fetching users", e);
+    return [];
+  }
+}
+
 // --- Stats Management ---
 
 export const saveGameResult = async (result: GameResult): Promise<void> => {
@@ -133,6 +153,8 @@ export const saveGameResult = async (result: GameResult): Promise<void> => {
   // Cloud
   try {
     await addDoc(collection(db, "game_results"), result);
+    // We save stats by username (legacy) AND we should probably link it to UID in future, 
+    // but for now keeping it consistent with current logic
     await setDoc(doc(db, "player_stats", result.username), playerStat, { merge: true });
   } catch (e) { console.error("Error saving stats to cloud", e); }
 };
@@ -212,12 +234,9 @@ export const saveLearningModules = async (modules: LearningModule[]): Promise<vo
     for (const mod of modules) {
       await setDoc(doc(db, 'content_modules', mod.id), mod);
     }
-    // Note: Handling deletion of modules from cloud if they are removed from array requires logic 
-    // matching IDs. For simple usage, we just update existing/new ones here.
   } catch (e) { console.error("Cloud module save failed", e); }
 };
 
-// Helper to delete a specific module from cloud if user clicks delete
 export const deleteLearningModuleFromCloud = async (moduleId: string): Promise<void> => {
     try {
         await deleteDoc(doc(db, 'content_modules', moduleId));

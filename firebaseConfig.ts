@@ -1,6 +1,7 @@
 
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 // Configuration from your Firebase Console screenshot
 const firebaseConfig = {
@@ -17,5 +18,8 @@ const app = initializeApp(firebaseConfig);
 
 // Export the database connection so other files can use it
 export const db = getFirestore(app);
+
+// Export Authentication
+export const auth = getAuth(app);
 
 export default firebaseConfig;

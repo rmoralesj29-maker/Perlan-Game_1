@@ -4,14 +4,17 @@ import {
   Play, Settings, Trophy, Users, ArrowLeft, Check, X, Clock, 
   Thermometer, Mountain, Wind, Bird, History, Droplets, 
   Building2, Gift, BrainCircuit, Zap, Award, Lock, Lightbulb,
-  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft, Loader2
+  ChevronDown, Trash2, Eye, EyeOff, PieChart, BarChart2, Filter, ChevronUp, Sparkles, PlusCircle, Search, AlertCircle, BookOpen, ChevronRight, CheckCircle, RotateCcw, Edit2, ArrowUp, ArrowDown, Save, ChevronLeft, Loader2, LogOut, Mail, User as UserIcon
 } from 'lucide-react';
-import { Category, Difficulty, GameConfig, GameResult, Question, PlayerAnswer, PlayerStats, LearningModule, LearningUnit, UserProgress, Flashcard, LearningQuiz } from './types';
+import { Category, Difficulty, GameConfig, GameResult, Question, PlayerAnswer, PlayerStats, LearningModule, LearningUnit, UserProgress, Flashcard, LearningQuiz, UserProfile, AVATARS } from './types';
 import Button from './components/Button';
-import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules, deleteLearningModuleFromCloud, syncContentFromFirebase } from './services/storageService';
+import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules, deleteLearningModuleFromCloud, syncContentFromFirebase, getAllUsers } from './services/storageService';
 import { generateQuestionsWithAI } from './services/geminiService';
+import { loginUser, registerUser, logoutUser, resetPassword, subscribeToAuthChanges } from './services/authService';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart as RePie, Pie } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
+import { User } from 'firebase/auth';
+import Modal from './components/Modal';
 
 // --- Helper Components & Icons ---
 
@@ -28,6 +31,23 @@ const CategoryIcon = ({ category, size=24 }: { category: Category, size?: number
     default: return <BrainCircuit size={size} className="text-white" />;
   }
 };
+
+const AvatarDisplay = ({ avatarId, size = "md" }: { avatarId?: string, size?: "sm" | "md" | "lg" | "xl" }) => {
+    const avatar = AVATARS.find(a => a.id === avatarId) || AVATARS[0];
+    const sizeClasses = {
+        sm: "w-8 h-8 text-lg",
+        md: "w-12 h-12 text-2xl",
+        lg: "w-16 h-16 text-3xl",
+        xl: "w-24 h-24 text-5xl"
+    };
+
+    return (
+        <div className={`${sizeClasses[size]} rounded-full flex items-center justify-center bg-white shadow-md border-2 border-white/50 overflow-hidden`}>
+            {avatar.icon}
+        </div>
+    );
+};
+
 
 // --- Reusable UI Components ---
 
@@ -104,13 +124,22 @@ const CustomSelect = ({
 
 const LeaderboardModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const [stats, setStats] = useState<PlayerStats[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
 
   useEffect(() => {
     if (isOpen) {
       const allStats = getAllStats();
       setStats(allStats.sort((a, b) => b.totalScore - a.totalScore).slice(0, 10));
+      getAllUsers().then(setUsers);
     }
   }, [isOpen]);
+
+  const getUserAvatar = (username: string) => {
+      // Since stats currently store username (legacy), we try to find the user profile by display name
+      // In a refactor, we should store UID in stats, but for now matching name is fine
+      const user = users.find(u => u.displayName === username);
+      return user?.avatarId || 'puffin';
+  };
 
   if (!isOpen) return null;
 
@@ -137,14 +166,17 @@ const LeaderboardModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
                {stats.map((player, index) => (
                  <div key={player.username} className="flex items-center bg-[#0057A0]/50 p-4 rounded-2xl border border-white/5">
                     <div className={`
-                      w-8 h-8 rounded-full flex items-center justify-center font-bold text-slate-900 mr-4 flex-shrink-0
+                      w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs text-slate-900 mr-3 flex-shrink-0
                       ${index === 0 ? 'bg-yellow-400' : index === 1 ? 'bg-gray-300' : index === 2 ? 'bg-orange-400' : 'bg-white/20 text-white'}
                     `}>
                       {index + 1}
                     </div>
+                    <div className="mr-3">
+                         <AvatarDisplay avatarId={getUserAvatar(player.username)} size="sm" />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-bold truncate">{player.username}</p>
-                      <p className="text-blue-300 text-xs">{player.totalGames} Games Played</p>
+                      <p className="text-blue-300 text-xs">{player.totalGames} Games</p>
                     </div>
                     <div className="text-right">
                        <p className="text-white font-bold text-lg">{player.totalScore}</p>
@@ -283,32 +315,27 @@ const MiniQuizComponent: React.FC<{ quiz: {question: string, options: string[], 
 }
 
 const LearningScreen: React.FC<{ onBack: () => void, username?: string }> = ({ onBack, username = "Guest" }) => {
-  const [modules, setModules] = useState<LearningModule[]>([]);
-  const [activeModule, setActiveModule] = useState<LearningModule | null>(null);
-  const [progress, setProgress] = useState<UserProgress>({ username, completedUnitIds: [] });
-  const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
+    const [modules, setModules] = useState<LearningModule[]>([]);
+    const [activeModule, setActiveModule] = useState<LearningModule | null>(null);
+    const [progress, setProgress] = useState<UserProgress>({ username, completedUnitIds: [] });
+    const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
 
-  useEffect(() => {
-      setModules(getLearningModules());
-      if (username) {
-        setProgress(getUserProgress(username));
-      }
-  }, [username]);
+    useEffect(() => {
+        setModules(getLearningModules());
+        if (username) {
+            setProgress(getUserProgress(username));
+        }
+    }, [username]);
 
-  const handleCompleteUnit = (unitId: string) => {
-    if (progress.completedUnitIds.includes(unitId)) return;
-    
-    const newProgress = {
-      ...progress,
-      completedUnitIds: [...progress.completedUnitIds, unitId]
+    const handleCompleteUnit = (unitId: string) => {
+        if (progress.completedUnitIds.includes(unitId)) return;
+        const newProgress = { ...progress, completedUnitIds: [...progress.completedUnitIds, unitId] };
+        setProgress(newProgress);
+        saveUserProgress(newProgress);
     };
-    setProgress(newProgress);
-    saveUserProgress(newProgress);
-  };
 
-  return (
+    return (
     <div className="min-h-screen flex flex-col max-w-md mx-auto text-white relative pb-8">
-       {/* Header */}
        <div className="p-6 flex items-center gap-4">
           <button onClick={activeModule ? () => setActiveModule(null) : onBack} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition backdrop-blur-md">
             <ArrowLeft size={24} />
@@ -316,7 +343,6 @@ const LearningScreen: React.FC<{ onBack: () => void, username?: string }> = ({ o
           <h1 className="font-heading font-bold text-2xl">{activeModule ? activeModule.category : "Learn"}</h1>
        </div>
 
-       {/* Main Module List */}
        {!activeModule && (
          <div className="px-6 space-y-4 animate-fade-in">
             {modules.map((mod) => {
@@ -325,106 +351,48 @@ const LearningScreen: React.FC<{ onBack: () => void, username?: string }> = ({ o
                const percent = totalUnits > 0 ? Math.round((completedCount / totalUnits) * 100) : 0;
 
                return (
-                 <button 
-                   key={mod.id}
-                   onClick={() => setActiveModule(mod)}
-                   className="w-full bg-white text-left rounded-3xl p-5 shadow-lg border-b-4 border-blue-100 active:border-b-0 active:translate-y-1 transition-all relative overflow-hidden group"
-                 >
+                 <button key={mod.id} onClick={() => setActiveModule(mod)} className="w-full bg-white text-left rounded-3xl p-5 shadow-lg border-b-4 border-blue-100 active:border-b-0 active:translate-y-1 transition-all relative overflow-hidden group">
                     <div className="flex justify-between items-start mb-3">
                         <div className="bg-blue-50 p-3 rounded-2xl text-[#0057A0]">
                             <CategoryIcon category={mod.category} size={28} />
                         </div>
-                        <span className="text-xs font-extrabold bg-blue-100 text-[#0057A0] px-2 py-1 rounded-lg">
-                            {completedCount}/{totalUnits}
-                        </span>
+                        <span className="text-xs font-extrabold bg-blue-100 text-[#0057A0] px-2 py-1 rounded-lg">{completedCount}/{totalUnits}</span>
                     </div>
                     <h3 className="text-[#003D73] font-bold text-xl mb-1">{mod.category}</h3>
                     <p className="text-slate-500 text-sm font-medium mb-4 line-clamp-2">{mod.description}</p>
-                    
-                    {/* Progress Bar */}
-                    <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden">
-                        <div 
-                          className="bg-[#30C050] h-full rounded-full transition-all duration-500" 
-                          style={{ width: `${percent}%` }} 
-                        />
-                    </div>
+                    <div className="w-full bg-gray-100 h-3 rounded-full overflow-hidden"><div className="bg-[#30C050] h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }} /></div>
                  </button>
                )
             })}
          </div>
        )}
 
-       {/* Detailed Module View (Winding Path Style) */}
        {activeModule && (
           <div className="flex-1 relative overflow-y-auto custom-scrollbar pb-20">
-              {/* Path Background Line */}
               <div className="absolute left-1/2 top-0 bottom-0 w-2 bg-white/10 -translate-x-1/2 z-0"></div>
-
               <div className="px-6 pt-8 space-y-12">
                   {activeModule.units.map((unit, idx) => {
                     const isCompleted = progress.completedUnitIds.includes(unit.id);
                     const isLocked = idx > 0 && !progress.completedUnitIds.includes(activeModule.units[idx - 1].id);
                     const isExpanded = expandedUnit === unit.id;
-                    
-                    // ZigZag Logic
                     const isLeft = idx % 2 === 0;
-
                     return (
                       <div key={unit.id} className={`relative flex ${isLeft ? 'justify-start' : 'justify-end'} ${isLocked ? 'opacity-60 grayscale' : ''}`}>
-                         
                          <div className={`relative z-10 flex flex-col items-center ${isLeft ? 'mr-auto ml-4' : 'ml-auto mr-4'}`}>
-                             
-                             {/* Node Circle */}
-                             <button 
-                                disabled={isLocked}
-                                onClick={() => setExpandedUnit(isExpanded ? null : unit.id)}
-                                className={`
-                                  w-20 h-20 rounded-full border-[6px] flex items-center justify-center shadow-xl transition-all
-                                  ${isCompleted ? 'bg-[#30C050] border-[#24963d] text-white' : 'bg-white border-blue-200 text-gray-300'}
-                                  ${!isLocked && !isCompleted ? 'hover:scale-110 active:scale-95 animate-bounce-short' : ''}
-                                  ${isExpanded ? 'ring-4 ring-white/50' : ''}
-                                `}
-                             >
+                             <button disabled={isLocked} onClick={() => setExpandedUnit(isExpanded ? null : unit.id)} className={`w-20 h-20 rounded-full border-[6px] flex items-center justify-center shadow-xl transition-all ${isCompleted ? 'bg-[#30C050] border-[#24963d] text-white' : 'bg-white border-blue-200 text-gray-300'} ${!isLocked && !isCompleted ? 'hover:scale-110 active:scale-95 animate-bounce-short' : ''} ${isExpanded ? 'ring-4 ring-white/50' : ''}`}>
                                 {isCompleted ? <Check size={36} strokeWidth={4} /> : unit.type === 'flashcards' ? <Sparkles size={32} className="text-[#0057A0]"/> : unit.type === 'quiz' ? <BrainCircuit size={32} className="text-[#0057A0]"/> : <BookOpen size={32} className={isLocked ? "text-gray-300" : "text-[#0057A0]"} />}
                              </button>
-
-                             {/* Unit Title Label */}
-                             <div className="mt-3 bg-[#003D73] px-4 py-1.5 rounded-xl shadow-md border border-white/10">
-                                <p className="text-xs font-bold text-white uppercase tracking-wide">{unit.title}</p>
-                             </div>
+                             <div className="mt-3 bg-[#003D73] px-4 py-1.5 rounded-xl shadow-md border border-white/10"><p className="text-xs font-bold text-white uppercase tracking-wide">{unit.title}</p></div>
                          </div>
-
-                         {/* Expanded Content Card - Modal overlay style */}
                          {isExpanded && !isLocked && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
                                 <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-slide-up relative max-h-[80vh] overflow-y-auto custom-scrollbar-blue">
                                     <button onClick={() => setExpandedUnit(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20}/></button>
-                                    
-                                    <div className="flex items-center gap-2 mb-4 text-[#0057A0]">
-                                        {unit.type === 'flashcards' ? <Sparkles size={20}/> : unit.type === 'quiz' ? <BrainCircuit size={20}/> : <BookOpen size={20}/>}
-                                        <span className="text-sm font-bold uppercase tracking-wide">{unit.type === 'text' ? 'Read' : unit.type === 'flashcards' ? 'Practice' : 'Quiz'} • {unit.duration}</span>
-                                    </div>
-                                    
+                                    <div className="flex items-center gap-2 mb-4 text-[#0057A0]">{unit.type === 'flashcards' ? <Sparkles size={20}/> : unit.type === 'quiz' ? <BrainCircuit size={20}/> : <BookOpen size={20}/>}<span className="text-sm font-bold uppercase tracking-wide">{unit.type === 'text' ? 'Read' : unit.type === 'flashcards' ? 'Practice' : 'Quiz'} • {unit.duration}</span></div>
                                     <h2 className="text-2xl font-heading font-bold text-slate-800 mb-6">{unit.title}</h2>
-
-                                    {/* Content Logic */}
-                                    {unit.type === 'text' && (
-                                        <>
-                                            <p className="text-lg leading-relaxed font-medium text-slate-600 mb-8">{unit.content}</p>
-                                            <Button fullWidth variant={isCompleted ? 'success' : 'primary'} onClick={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} disabled={isCompleted}>
-                                                {isCompleted ? "Completed" : "Mark Complete"}
-                                            </Button>
-                                        </>
-                                    )}
-
-                                    {unit.type === 'flashcards' && unit.flashcards && (
-                                        <FlashcardComponent cards={unit.flashcards} onComplete={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} />
-                                    )}
-
-                                    {unit.type === 'quiz' && unit.quiz && (
-                                        <MiniQuizComponent quiz={unit.quiz} onComplete={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} />
-                                    )}
-
+                                    {unit.type === 'text' && (<><p className="text-lg leading-relaxed font-medium text-slate-600 mb-8">{unit.content}</p><Button fullWidth variant={isCompleted ? 'success' : 'primary'} onClick={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} disabled={isCompleted}>{isCompleted ? "Completed" : "Mark Complete"}</Button></>)}
+                                    {unit.type === 'flashcards' && unit.flashcards && (<FlashcardComponent cards={unit.flashcards} onComplete={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} />)}
+                                    {unit.type === 'quiz' && unit.quiz && (<MiniQuizComponent quiz={unit.quiz} onComplete={() => { handleCompleteUnit(unit.id); setExpandedUnit(null); }} />)}
                                 </div>
                             </div>
                          )}
@@ -438,25 +406,147 @@ const LearningScreen: React.FC<{ onBack: () => void, username?: string }> = ({ o
   )
 };
 
+// --- AUTH SCREEN ---
 
-// --- Views ---
+const AuthScreen: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [name, setName] = useState('');
+    const [selectedAvatar, setSelectedAvatar] = useState('puffin');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [resetSent, setResetSent] = useState(false);
 
-const HomeScreen: React.FC<{ onStart: (config: GameConfig) => void, onAdmin: () => void, onLearning: () => void }> = ({ onStart, onAdmin, onLearning }) => {
-  const [name, setName] = useState('');
+    const handleSubmit = async () => {
+        if (!email || !password) { setError("Please fill in all fields"); return; }
+        if (!isLogin && !name) { setError("Please enter your name"); return; }
+        setError('');
+        setLoading(true);
+        try {
+            if (isLogin) {
+                const user = await loginUser(email, password);
+                onLogin(user);
+            } else {
+                const user = await registerUser(email, password, name, selectedAvatar);
+                onLogin(user);
+            }
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleReset = async () => {
+        if(!email) { setError("Please enter your email first"); return; }
+        try {
+            await resetPassword(email);
+            setResetSent(true);
+            setError("");
+        } catch(err: any) {
+            setError(err.message);
+        }
+    }
+
+    return (
+        <div className="min-h-screen flex items-center justify-center p-6">
+            <div className="bg-white w-full max-w-md rounded-3xl p-8 shadow-2xl animate-slide-up relative overflow-hidden">
+                <div className="text-center mb-8">
+                    <h1 className="font-heading font-extrabold text-3xl text-[#0057A0] mb-2">Perlan Game</h1>
+                    <p className="text-slate-500 font-medium">Staff Training Portal</p>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex p-1 bg-slate-100 rounded-xl mb-6">
+                    <button onClick={() => { setIsLogin(true); setError(''); }} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${isLogin ? 'bg-white text-[#0057A0] shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>Sign In</button>
+                    <button onClick={() => { setIsLogin(false); setError(''); }} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${!isLogin ? 'bg-white text-[#0057A0] shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>Create Account</button>
+                </div>
+
+                <div className="space-y-4">
+                    {!isLogin && (
+                        <>
+                            <div>
+                                <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-1 ml-1">Full Name</label>
+                                <div className="relative">
+                                    <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                                    <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:border-[#0057A0] transition" placeholder="John Doe" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1">Choose Avatar</label>
+                                <div className="flex justify-between gap-2">
+                                    {AVATARS.map(avatar => (
+                                        <button 
+                                            key={avatar.id} 
+                                            onClick={() => setSelectedAvatar(avatar.id)}
+                                            className={`w-12 h-12 rounded-full text-2xl flex items-center justify-center border-2 transition-all hover:scale-110 ${selectedAvatar === avatar.id ? 'border-[#0057A0] bg-blue-50 scale-110 shadow-md' : 'border-transparent bg-slate-50 grayscale hover:grayscale-0'}`}
+                                            title={avatar.label}
+                                        >
+                                            {avatar.icon}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                    <div>
+                        <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-1 ml-1">Email Address</label>
+                        <div className="relative">
+                            <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                            <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:border-[#0057A0] transition" placeholder="name@perlan.is" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-1 ml-1">Password</label>
+                        <div className="relative">
+                            <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20}/>
+                            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:outline-none focus:border-[#0057A0] transition" placeholder="••••••••" />
+                        </div>
+                    </div>
+                </div>
+
+                {error && <div className="mt-4 p-3 bg-red-50 text-red-600 text-sm font-bold rounded-xl flex items-center gap-2"><AlertCircle size={16}/>{error}</div>}
+                {resetSent && <div className="mt-4 p-3 bg-green-50 text-green-600 text-sm font-bold rounded-xl flex items-center gap-2"><CheckCircle size={16}/> Reset email sent! Check your inbox.</div>}
+
+                <Button fullWidth onClick={handleSubmit} className="mt-6 shadow-lg text-lg bg-[#0057A0]" disabled={loading}>
+                    {loading ? "Please wait..." : isLogin ? "Sign In" : "Create Account"}
+                </Button>
+
+                {isLogin && (
+                    <button onClick={handleReset} className="w-full text-center text-slate-400 text-sm mt-4 hover:text-[#0057A0] font-medium transition-colors">
+                        Forgot Password?
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// --- MAIN SCREENS ---
+
+const HomeScreen: React.FC<{ user: User, onStart: (config: GameConfig) => void, onAdmin: () => void, onLearning: () => void, onLogout: () => void }> = ({ user, onStart, onAdmin, onLearning, onLogout }) => {
   const [categoryMode, setCategoryMode] = useState<'general' | 'specific' | null>(null);
   const [category, setCategory] = useState<Category>(Category.NorthernLights);
   const [difficulty, setDifficulty] = useState<Difficulty>(Difficulty.Medium);
   const [challenge, setChallenge] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
+  // Fetch extra user details (like avatar)
+  useEffect(() => {
+      const fetchProfile = async () => {
+          const allUsers = await getAllUsers();
+          const profile = allUsers.find(u => u.uid === user.uid);
+          setUserProfile(profile || null);
+      };
+      fetchProfile();
+  }, [user]);
 
   const handleStart = () => {
-    if (name.trim().length < 2) {
-      alert("Please enter a valid name");
-      return;
-    }
     const selectedCategory = categoryMode === 'general' ? Category.General : category;
-    onStart({ username: name.trim(), category: selectedCategory, difficulty, isChallengeMode: challenge });
+    onStart({ username: user.displayName || 'Player', category: selectedCategory, difficulty, isChallengeMode: challenge });
   };
 
   return (
@@ -490,20 +580,22 @@ const HomeScreen: React.FC<{ onStart: (config: GameConfig) => void, onAdmin: () 
           <p className="font-heading font-bold text-2xl text-blue-200 tracking-wide">Game</p>
         </div>
 
+        {/* Profile Card */}
+        <div className="w-full bg-white/10 p-4 rounded-3xl border border-white/20 flex items-center justify-between backdrop-blur-md">
+            <div className="flex items-center gap-3">
+                <AvatarDisplay avatarId={userProfile?.avatarId} />
+                <div>
+                    <p className="text-xs text-blue-200 font-bold uppercase tracking-wider">Welcome,</p>
+                    <p className="text-lg font-bold text-white leading-none">{user.displayName}</p>
+                </div>
+            </div>
+            <button onClick={onLogout} className="p-2 bg-white/10 rounded-full hover:bg-red-500/80 transition text-white/70 hover:text-white">
+                <LogOut size={18} />
+            </button>
+        </div>
+
         <div className="w-full space-y-5 bg-white/10 p-6 rounded-3xl backdrop-blur-md border border-white/20 shadow-xl">
           
-          {/* Name Input */}
-          <div className="space-y-2">
-            <label className="text-xs uppercase font-bold text-blue-200 ml-2 tracking-wider">Player Name</label>
-            <input 
-              type="text" 
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Type your name"
-              className="w-full bg-white/20 border border-white/10 rounded-2xl px-5 py-4 text-white placeholder-blue-200/50 focus:outline-none focus:ring-2 focus:ring-white/50 transition font-medium text-lg"
-            />
-          </div>
-
           {/* Mode Selection Buttons - Minimalist */}
           <div className="grid grid-cols-2 gap-3">
              <button 
@@ -553,7 +645,6 @@ const HomeScreen: React.FC<{ onStart: (config: GameConfig) => void, onAdmin: () 
                   </div>
                 )}
                 
-                {/* Click outside listener background */}
                 {isDropdownOpen && (
                   <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setIsDropdownOpen(false)}></div>
                 )}
@@ -586,941 +677,1018 @@ const HomeScreen: React.FC<{ onStart: (config: GameConfig) => void, onAdmin: () 
                 <Clock size={18} className="text-blue-200"/>
                 <div className="text-left">
                     <p className="font-bold text-sm text-white">Challenge Mode</p>
-                    <p className="text-[10px] text-blue-200">15s per question</p>
+                    <p className="text-xs text-blue-200">15s per question</p>
                 </div>
              </div>
-             <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${challenge ? 'border-yellow-400 bg-yellow-400 text-black' : 'border-white/30'}`}>
-                 {challenge && <Check size={12} strokeWidth={4} />}
+             <div className={`w-12 h-7 rounded-full p-1 transition-colors ${challenge ? 'bg-[#30C050]' : 'bg-black/30'}`}>
+                <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${challenge ? 'translate-x-5' : 'translate-x-0'}`} />
              </div>
           </button>
 
-          <Button 
-            fullWidth 
-            size="lg" 
-            onClick={handleStart} 
-            disabled={!name || !categoryMode}
-            className="mt-4 shadow-xl text-lg py-4 bg-[#0057A0] border-[#003D73] hover:bg-[#003D73]"
-          >
+          <Button fullWidth size="lg" onClick={handleStart} disabled={!categoryMode} className="shadow-xl text-lg mt-2">
             Start Game
           </Button>
         </div>
       </div>
-
+      
       <LeaderboardModal isOpen={showLeaderboard} onClose={() => setShowLeaderboard(false)} />
     </div>
   );
 };
 
-const GameScreen: React.FC<{ config: GameConfig, onEnd: (result: GameResult) => void, onBack: () => void }> = ({ config, onEnd, onBack }) => {
+const GameScreen: React.FC<{ config: GameConfig, onEnd: (result: GameResult) => void }> = ({ config, onEnd }) => {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [maxStreak, setMaxStreak] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(config.isChallengeMode ? 15 : 0);
   const [answers, setAnswers] = useState<PlayerAnswer[]>([]);
+  const [timeLeft, setTimeLeft] = useState(15);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
-  const [startCountdown, setStartCountdown] = useState<number | null>(3);
-  const [isGameActive, setIsGameActive] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [shuffledOptions, setShuffledOptions] = useState<number[]>([]);
+  const [streak, setStreak] = useState(0);
+  const [maxStreak, setMaxStreak] = useState(0);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [countdown, setCountdown] = useState(3);
+  const [isReady, setIsReady] = useState(false);
 
+  // Load Questions
   useEffect(() => {
-    const allQuestions = getQuestions();
-    let filtered = config.category !== Category.General 
-        ? allQuestions.filter(q => q.category === config.category && q.difficulty === config.difficulty)
-        : allQuestions; 
-    
-    if (config.category === Category.General) {
-        filtered = allQuestions.filter(q => q.difficulty === config.difficulty);
-        if (filtered.length < 10) filtered = allQuestions;
-    } else {
-        const difficultQs = filtered.filter(q => q.difficulty === config.difficulty);
-        if (difficultQs.length >= 5) {
-            filtered = difficultQs;
-        }
+    const load = () => {
+      const allQuestions = getQuestions();
+      let filtered = config.category === Category.General 
+        ? allQuestions 
+        : allQuestions.filter(q => q.category === config.category);
+      
+      // If not enough questions, fallback to all
+      if (filtered.length < 10) filtered = allQuestions;
+      
+      // Shuffle and pick 10
+      const shuffled = filtered.sort(() => 0.5 - Math.random()).slice(0, 10);
+      setQuestions(shuffled);
+    };
+    load();
+  }, [config]);
+
+  // Shuffle Options for current question
+  useEffect(() => {
+    if (questions[currentIndex]) {
+       const indices = [0, 1, 2];
+       setShuffledOptions(indices.sort(() => 0.5 - Math.random()));
     }
-    
-    const shuffledQs = [...filtered].sort(() => 0.5 - Math.random()).slice(0, 10);
-    if (shuffledQs.length === 0) {
-       alert("Not enough questions! Please ask an admin to add more.");
-       onBack();
+  }, [currentIndex, questions]);
+
+  // 3-2-1 Countdown
+  useEffect(() => {
+    if (countdown > 0) {
+        const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+        return () => clearTimeout(timer);
+    } else {
+        setIsReady(true);
+    }
+  }, [countdown]);
+
+  // Game Timer
+  useEffect(() => {
+    if (!isReady || isAnswered || !config.isChallengeMode) return;
+    if (timeLeft === 0) {
+       handleAnswer(-1); // Time ran out
        return;
     }
+    const timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft, isAnswered, config.isChallengeMode, isReady]);
 
-    // Randomize Option Order for each question using Fisher-Yates shuffle
-    const finalQuestions = shuffledQs.map(q => {
-        const indices = [0, 1, 2];
-        for (let i = indices.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [indices[i], indices[j]] = [indices[j], indices[i]];
-        }
-        
-        const newOptions = indices.map(i => q.options[i]);
-        const newCorrectIndex = indices.indexOf(q.correctIndex);
-
-        return {
-            ...q,
-            options: newOptions,
-            correctIndex: newCorrectIndex
-        };
-    });
-
-    setQuestions(finalQuestions);
-  }, [config, onBack]);
-
-  useEffect(() => {
-      if (startCountdown !== null && startCountdown > 0) {
-          const timer = setTimeout(() => setStartCountdown(startCountdown - 1), 1000);
-          return () => clearTimeout(timer);
-      } else if (startCountdown === 0) {
-          setTimeout(() => {
-              setStartCountdown(null);
-              setIsGameActive(true);
-          }, 500);
-      }
-  }, [startCountdown]);
-
-  useEffect(() => {
-    if (isGameActive && config.isChallengeMode && !isAnswered && questions.length > 0) {
-      setTimeLeft(15);
-      timerRef.current = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            handleAnswer(-1);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [currentIndex, isAnswered, config.isChallengeMode, questions, isGameActive]);
-
-  const handleAnswer = (optionIndex: number) => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setSelectedOption(optionIndex);
+  const handleAnswer = (shuffledIndex: number) => {
+    if (isAnswered) return;
+    
+    // If shuffledIndex is -1, it means timeout
+    const originalIndex = shuffledIndex === -1 ? -1 : shuffledOptions[shuffledIndex];
+    
+    setSelectedOption(shuffledIndex);
     setIsAnswered(true);
     
     const currentQ = questions[currentIndex];
-    const correct = optionIndex === currentQ.correctIndex;
+    const isCorrect = originalIndex === currentQ.correctIndex;
     
-    if (correct) {
-      const newStreak = streak + 1;
-      setStreak(newStreak);
-      if (newStreak > maxStreak) setMaxStreak(newStreak);
+    if (isCorrect) {
+        const newStreak = streak + 1;
+        setStreak(newStreak);
+        if (newStreak > maxStreak) setMaxStreak(newStreak);
     } else {
-      setStreak(0);
+        setStreak(0);
     }
 
-    let originalIndex = -1;
-    if (optionIndex >= 0) {
-        const selectedText = currentQ.options[optionIndex];
-        const allQs = getQuestions();
-        const originalQ = allQs.find(q => q.id === currentQ.id);
-        if (originalQ) {
-            originalIndex = originalQ.options.indexOf(selectedText);
-        }
-    }
-
-    setAnswers(prev => [...prev, {
+    setAnswers([...answers, {
       questionId: currentQ.id,
-      selectedOptionIndex: originalIndex,
-      isCorrect: correct,
-      timeTaken: config.isChallengeMode ? 15 - timeLeft : 0 
+      selectedOptionIndex: originalIndex, // Store the REAL index for data integrity
+      isCorrect,
+      timeTaken: 15 - timeLeft
     }]);
+
+    // Show feedback briefly before next question
+    setShowFeedback(true);
   };
 
-  const nextQuestion = () => {
-    setIsAnswered(false);
-    setSelectedOption(null);
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex(currentIndex + 1);
-    } else {
-      saveGameResult({
-        id: Date.now().toString(),
-        timestamp: Date.now(),
-        username: config.username,
-        config,
-        score: answers.filter(a => a.isCorrect).length, 
-        totalQuestions: questions.length,
-        answers: answers,
-        streakMax: maxStreak
-      });
-      onEnd({
-        id: Date.now().toString(),
-        timestamp: Date.now(),
-        username: config.username,
-        config,
-        score: answers.filter(a => a.isCorrect).length, 
-        totalQuestions: questions.length,
-        answers: answers,
-        streakMax: maxStreak
-      });
-    }
+  const handleNext = () => {
+      setShowFeedback(false);
+      setIsAnswered(false);
+      setSelectedOption(null);
+      setTimeLeft(15);
+      
+      if (currentIndex < 9) {
+          setCurrentIndex(currentIndex + 1);
+      } else {
+          const result: GameResult = {
+              id: Date.now().toString(),
+              timestamp: Date.now(),
+              username: config.username,
+              config,
+              score: answers.filter(a => a.isCorrect).length + (answers[answers.length -1].isCorrect ? 1 : 0), // Add current answer if correct
+              totalQuestions: 10,
+              answers: [...answers], // Note: 'answers' state might not have updated yet in this closure, but for simplicity in this mock
+              streakMax: maxStreak
+          };
+          // Re-calculate score accurately to be safe
+          const finalScore = answers.reduce((acc, curr) => acc + (curr.isCorrect ? 1 : 0), 0) + (questions[currentIndex].correctIndex === (selectedOption === -1 ? -1 : shuffledOptions[selectedOption!]) ? 1 : 0);
+          result.score = finalScore;
+          
+          // Update last answer in result
+          const lastAnswer = {
+               questionId: questions[currentIndex].id,
+               selectedOptionIndex: selectedOption === -1 ? -1 : shuffledOptions[selectedOption!],
+               isCorrect: questions[currentIndex].correctIndex === (selectedOption === -1 ? -1 : shuffledOptions[selectedOption!]),
+               timeTaken: 15 - timeLeft
+          };
+          result.answers = [...answers, lastAnswer];
+          
+          saveGameResult(result);
+          onEnd(result);
+      }
   };
 
-  if (startCountdown !== null) {
+  if (!isReady) {
       return (
-          <div className="flex items-center justify-center min-h-screen bg-[#0057A0] text-white">
+          <div className="min-h-screen flex items-center justify-center bg-[#003D73]">
               <div className="text-center animate-bounce-short">
-                 <div className="text-8xl font-heading font-black drop-shadow-lg mb-4">
-                     {startCountdown > 0 ? startCountdown : "GO!"}
-                 </div>
-                 <p className="text-xl font-medium opacity-80 uppercase tracking-widest">Are you ready?</p>
+                  <div className="text-8xl font-black text-white mb-4 font-heading">{countdown > 0 ? countdown : "GO!"}</div>
+                  <p className="text-blue-200 text-xl font-bold uppercase tracking-widest">Get Ready</p>
               </div>
           </div>
       )
   }
-  
-  if (questions.length === 0) return null;
+
+  if (questions.length === 0) return <div className="p-10 text-white">Loading...</div>;
+
   const currentQ = questions[currentIndex];
 
   return (
-    <div className="min-h-screen flex flex-col max-w-lg mx-auto p-4 relative pb-8">
-      <div className="flex justify-between items-center text-white mb-4 mt-2">
-        <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition"><ArrowLeft size={24}/></button>
-        <div className="flex space-x-1">
-            {questions.map((_, idx) => (
-                <div key={idx} className={`h-1.5 w-1.5 rounded-full transition-all ${idx === currentIndex ? 'w-4 bg-white' : idx < currentIndex ? 'bg-white/50' : 'bg-white/20'}`}/>
-            ))}
-        </div>
-        <div className="flex items-center space-x-1 min-w-[3rem] justify-end">
-            {streak > 1 && <div className="flex items-center text-yellow-400 font-bold animate-bounce-short"><Zap size={18} fill="currentColor" /><span className="ml-1">{streak}</span></div>}
-        </div>
+    <div className="min-h-screen flex flex-col max-w-md mx-auto p-6 relative text-white">
+      {/* Header Stats */}
+      <div className="flex justify-between items-center mb-6 bg-white/10 p-3 rounded-2xl backdrop-blur-md border border-white/10">
+         <div className="flex items-center gap-3">
+             <div className="w-10 h-10 rounded-full border-[3px] border-white flex items-center justify-center font-bold bg-[#0057A0]">
+                {currentIndex + 1}
+             </div>
+             <div className="flex flex-col">
+                <span className="text-[10px] uppercase font-bold text-blue-200">Question</span>
+                <span className="text-xs font-bold text-white/80">of 10</span>
+             </div>
+         </div>
+         
+         {config.isChallengeMode && (
+             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl font-mono font-bold text-lg ${timeLeft < 5 ? 'bg-red-500/20 text-red-300 border border-red-500/50' : 'bg-blue-900/30 text-blue-200'}`}>
+                <Clock size={18} /> {timeLeft}s
+             </div>
+         )}
+
+         <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-400/20 rounded-xl border border-yellow-400/30">
+             <Zap size={18} className="text-yellow-400 fill-yellow-400" />
+             <span className="font-bold text-yellow-100">{streak}</span>
+         </div>
       </div>
 
       {/* Question Card */}
-      <div className="bg-[#0057A0] text-white rounded-3xl p-6 md:p-8 shadow-xl mb-4 flex-grow-0 min-h-[200px] flex flex-col justify-center items-center text-center relative z-10 border border-white/10">
-        {config.isChallengeMode && (
-             <div className={`absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-sm font-bold shadow-md flex items-center gap-1 ${timeLeft <= 5 ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-slate-700'}`}>
-                 <Clock size={14} />{timeLeft}s
-             </div>
-        )}
-        <span className="absolute top-4 left-4 text-[10px] font-extrabold text-blue-200 uppercase tracking-widest bg-white/10 px-2 py-1 rounded-md">{currentQ.category}</span>
-        <h2 className="text-lg md:text-xl font-heading font-extrabold leading-snug mt-4">{currentQ.text}</h2>
-      </div>
-
-      {/* Timeout Banner */}
-      {isAnswered && selectedOption === -1 && (
-         <div className="bg-red-500 text-white text-center py-2 px-4 rounded-xl mb-4 font-bold uppercase tracking-widest animate-bounce-short shadow-lg border border-white/20">
-            CLOCK RUN OUT!
-         </div>
-      )}
-
-      <div className="space-y-3 mb-4">
-        {currentQ.options.map((opt, idx) => {
-           let style = "bg-white/90 text-slate-700 hover:bg-white";
-           let iconStyle = "border-gray-300 text-gray-400";
-           if (isAnswered) {
-               if (idx === currentQ.correctIndex) {
-                   style = "bg-green-500 text-white border-green-500 shadow-lg transform scale-[1.02]";
-                   iconStyle = "border-white text-white";
-               } else if (selectedOption === idx) {
-                   style = "bg-red-500 text-white border-red-500 opacity-90";
-                   iconStyle = "border-white text-white";
-               } else {
-                   style = "bg-white/40 text-slate-800 opacity-50";
-               }
-           } else if (selectedOption === idx) {
-               style = "bg-[#0057A0] text-white";
-               iconStyle = "border-white text-white";
-           }
-           return (
-            <button key={idx} disabled={isAnswered} onClick={() => handleAnswer(idx)} className={`w-full p-4 rounded-2xl text-left font-bold text-base transition-all duration-300 shadow-sm border-b-4 border-transparent active:scale-[0.98] flex items-center ${style}`}>
-                <div className={`w-8 h-8 rounded-lg border-2 flex-shrink-0 flex items-center justify-center mr-4 font-bold text-sm transition-colors ${iconStyle}`}>{String.fromCharCode(65 + idx)}</div>
-                <span className="leading-tight">{opt}</span>
-                {isAnswered && idx === currentQ.correctIndex && <Check className="ml-auto" />}
-                {isAnswered && selectedOption === idx && idx !== currentQ.correctIndex && <X className="ml-auto" />}
-            </button>
-           )
-        })}
-      </div>
-
-      {isAnswered && (
-          <div className="animate-slide-up bg-[#003D73] p-4 rounded-2xl border border-white/20 text-white shadow-lg mt-auto">
-             <div className="flex items-start gap-3 mb-3">
-                <div className="bg-yellow-400/20 p-1.5 rounded-lg text-yellow-300 flex-shrink-0 mt-0.5"><Lightbulb size={18} /></div>
-                <div className="flex-1">
-                    <p className="text-[10px] font-bold uppercase text-blue-200 tracking-wider mb-0.5">Did you know?</p>
-                    <p className="text-sm leading-snug text-white/90">{currentQ.fact}</p>
-                </div>
-             </div>
-             <Button fullWidth onClick={nextQuestion} className="bg-[#0057A0] text-white hover:bg-[#0057A0]/80 border-b-4 border-black/20 hover:border-black/30">
-                 {currentIndex === questions.length - 1 ? 'Finish Game' : 'Next Question'}
-             </Button>
+      <div className="bg-[#0057A0] rounded-3xl p-6 shadow-xl mb-6 border-4 border-white/20 relative overflow-hidden min-h-[200px] flex flex-col justify-center">
+          <div className="absolute top-0 right-0 p-4 opacity-10"><CategoryIcon category={currentQ.category} size={100}/></div>
+          
+          <div className="inline-flex self-start items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/20 text-[10px] font-bold uppercase tracking-widest text-blue-200 mb-4">
+             <span>{currentQ.category}</span>
+             <span>•</span>
+             <span>{currentQ.difficulty}</span>
           </div>
+          
+          <h2 className="text-2xl font-heading font-bold leading-tight relative z-10">{currentQ.text}</h2>
+      </div>
+
+      {/* Options */}
+      <div className="space-y-3 flex-1">
+         {shuffledOptions.map((originalIdx, renderIdx) => {
+             const isSelected = selectedOption === renderIdx;
+             const isCorrect = originalIdx === currentQ.correctIndex;
+             let stateStyle = "bg-white text-slate-700 border-b-4 border-slate-200 hover:bg-gray-50"; // Default
+
+             if (isAnswered) {
+                 if (isCorrect) stateStyle = "bg-[#30C050] text-white border-b-4 border-green-700"; // Correct
+                 else if (isSelected) stateStyle = "bg-[#E63946] text-white border-b-4 border-red-800"; // Wrong selection
+                 else stateStyle = "bg-white/50 text-slate-400 border-b-4 border-transparent"; // Others dimmed
+             }
+
+             return (
+                 <button
+                    key={renderIdx}
+                    disabled={isAnswered}
+                    onClick={() => handleAnswer(renderIdx)}
+                    className={`w-full p-4 rounded-2xl text-left font-bold text-lg transition-all duration-200 active:scale-[0.98] shadow-sm flex justify-between items-center ${stateStyle}`}
+                 >
+                    <span>{currentQ.options[originalIdx]}</span>
+                    {isAnswered && isCorrect && <Check size={24} />}
+                    {isAnswered && isSelected && !isCorrect && <X size={24} />}
+                 </button>
+             )
+         })}
+      </div>
+
+      {/* Feedback Overlay (Non-invasive) */}
+      {showFeedback && (
+        <div className="absolute bottom-6 left-6 right-6 animate-slide-up z-20">
+            {selectedOption === -1 && (
+                <div className="mb-3 bg-[#E63946] text-white p-3 rounded-2xl font-bold text-center shadow-lg animate-bounce-short flex items-center justify-center gap-2">
+                    <Clock size={20}/> CLOCK RUN OUT!
+                </div>
+            )}
+
+            <div className="bg-white rounded-3xl p-5 shadow-2xl border-b-8 border-blue-100 flex flex-col gap-4">
+               <div className="flex items-start gap-3">
+                  <div className="bg-yellow-100 p-2 rounded-full mt-1"><Lightbulb size={20} className="text-yellow-600" /></div>
+                  <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Did you know?</p>
+                      <p className="text-slate-700 font-medium text-sm leading-relaxed">{currentQ.fact}</p>
+                  </div>
+               </div>
+               <Button onClick={handleNext} fullWidth>
+                  {currentIndex < 9 ? "Next Question" : "Finish Game"} <ChevronRight size={18} />
+               </Button>
+            </div>
+        </div>
       )}
     </div>
   );
 };
 
 const ResultScreen: React.FC<{ result: GameResult, onHome: () => void }> = ({ result, onHome }) => {
+    const percentage = Math.round((result.score / result.totalQuestions) * 100);
+    const allQuestions = getQuestions(); // To fetch text for review
+
+    return (
+        <div className="min-h-screen flex flex-col max-w-md mx-auto p-6 text-white text-center">
+            <div className="flex-1 flex flex-col items-center justify-center space-y-8">
+                <div className="relative">
+                    <div className="absolute inset-0 bg-white/20 blur-2xl rounded-full"></div>
+                    <div className="relative bg-white text-[#0057A0] w-40 h-40 rounded-full flex items-center justify-center shadow-2xl border-8 border-blue-200">
+                        <div>
+                            <span className="text-5xl font-black font-heading">{percentage}%</span>
+                            <p className="text-xs font-bold uppercase tracking-widest text-blue-300 mt-1">Score</p>
+                        </div>
+                    </div>
+                    {percentage === 100 && <div className="absolute -top-4 -right-4 bg-yellow-400 text-slate-900 p-2 rounded-full shadow-lg animate-bounce"><Trophy size={32}/></div>}
+                </div>
+
+                <div className="space-y-2">
+                    <h2 className="text-3xl font-heading font-black">{percentage >= 80 ? "Outstanding!" : percentage >= 50 ? "Good Job!" : "Keep Learning!"}</h2>
+                    <p className="text-blue-200 text-lg">You got <span className="text-white font-bold">{result.score}</span> out of {result.totalQuestions} correct</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 w-full">
+                    <div className="bg-white/10 p-4 rounded-2xl border border-white/10">
+                        <div className="text-yellow-400 font-bold text-2xl mb-1">{result.streakMax}</div>
+                        <div className="text-xs uppercase font-bold text-blue-200">Best Streak</div>
+                    </div>
+                    <div className="bg-white/10 p-4 rounded-2xl border border-white/10">
+                        <div className="text-green-400 font-bold text-2xl mb-1">+{result.score * 10}</div>
+                        <div className="text-xs uppercase font-bold text-blue-200">XP Earned</div>
+                    </div>
+                </div>
+                
+                <div className="w-full text-left">
+                    <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><History size={20}/> Review Answers</h3>
+                    <div className="space-y-3 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                        {result.answers.map((ans, idx) => {
+                            const q = allQuestions.find(q => q.id === ans.questionId);
+                            if (!q) return null;
+                            const userChoice = ans.selectedOptionIndex === -1 ? "Time Ran Out" : q.options[ans.selectedOptionIndex];
+                            const correctChoice = q.options[q.correctIndex];
+
+                            return (
+                                <div key={idx} className="bg-[#003D73]/80 p-4 rounded-2xl border border-white/10 text-sm">
+                                    <p className="font-bold text-white mb-2">{idx + 1}. {q.text}</p>
+                                    <div className="grid grid-cols-1 gap-2">
+                                        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${ans.isCorrect ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                                            {ans.isCorrect ? <Check size={16}/> : (ans.selectedOptionIndex === -1 ? <Clock size={16}/> : <X size={16}/>)}
+                                            <span className="font-medium">You: <span className="font-bold">{userChoice}</span></span>
+                                        </div>
+                                        {!ans.isCorrect && (
+                                            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-500/20 text-green-300">
+                                                <Check size={16}/>
+                                                <span className="font-medium">Answer: <span className="font-bold">{correctChoice}</span></span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="mt-2 pt-2 border-t border-white/10 flex gap-2 items-start">
+                                        <Lightbulb size={14} className="text-yellow-400 shrink-0 mt-0.5"/>
+                                        <p className="text-blue-200 text-xs italic">{q.fact}</p>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </div>
+            </div>
+
+            <div className="mt-6 space-y-3">
+                <Button fullWidth onClick={onHome} className="shadow-xl text-lg bg-[#0057A0] border-white/20">
+                    Back to Home
+                </Button>
+            </div>
+        </div>
+    );
+};
+
+// --- ADMIN DASHBOARD ---
+
+const AdminAuth: React.FC<{ onUnlock: () => void, onBack: () => void }> = ({ onUnlock, onBack }) => {
+  const [pass, setPass] = useState('');
   
-  const percentage = Math.round((result.score / result.totalQuestions) * 100);
-  const [expandedReview, setExpandedReview] = useState<boolean>(false);
-  
-  let message = "Good effort!";
-  if (percentage >= 90) message = "Perlan Expert!";
-  else if (percentage >= 70) message = "Great Knowledge!";
-  else if (percentage >= 50) message = "Keep Exploring!";
+  const checkPass = () => {
+    if (pass === 'perlan2025') onUnlock();
+    else alert("Incorrect Password");
+  };
 
   return (
-    <div className="min-h-screen flex flex-col max-w-md mx-auto p-6 text-white items-center justify-center pb-12">
-        <div className="bg-white/10 rounded-full p-6 mb-6 animate-bounce-short"><Trophy size={48} className="text-yellow-400" /></div>
-        <h1 className="text-4xl font-heading font-bold mb-2 text-center">{message}</h1>
-        <p className="text-blue-200 mb-8 text-center">You scored {result.score} out of {result.totalQuestions}</p>
-
-        <div className="w-full bg-[#003D73] rounded-3xl p-8 shadow-xl mb-6 text-center border border-blue-400/30">
-             <div className="text-7xl font-black text-white mb-4 tracking-tighter drop-shadow-md">{percentage}%</div>
-             <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
-                 <div className="flex flex-col items-center">
-                     <span className="text-3xl font-bold text-white">{result.streakMax}</span>
-                     <span className="text-xs text-blue-200 uppercase font-bold tracking-wider">Best Streak</span>
-                 </div>
-                 <div className="flex flex-col items-center border-l border-white/10">
-                     <span className="text-3xl font-bold text-white capitalize">{result.config.difficulty}</span>
-                     <span className="text-xs text-blue-200 uppercase font-bold tracking-wider">Level</span>
-                 </div>
-             </div>
+    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
+      <div className="bg-white w-full max-w-sm p-8 rounded-3xl text-center shadow-2xl animate-slide-up relative border-2 border-blue-50">
+        <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-[#0057A0]">
+            <Lock size={32} />
         </div>
-
-        <div className="w-full mb-6">
-             <button onClick={() => setExpandedReview(!expandedReview)} className="w-full bg-[#0057A0] hover:bg-[#003D73] p-4 rounded-xl flex justify-between items-center transition text-white border border-white/20">
-                 <span className="font-bold">Review Answers</span>
-                 {expandedReview ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
-             </button>
-
-             {expandedReview && (
-                 <div className="mt-4 space-y-4 animate-fade-in max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                    {result.answers.map((ans, idx) => {
-                        const allQs = getQuestions();
-                        const q = allQs.find(q => q.id === ans.questionId);
-                        if (!q) return null;
-                        
-                        const userAnswerText = ans.selectedOptionIndex >= 0 ? q.options[ans.selectedOptionIndex] : "Time Ran Out";
-                        const correctAnswerText = q.options[q.correctIndex];
-                        const isTimeOut = ans.selectedOptionIndex === -1;
-
-                        return (
-                            <div key={idx} className="bg-[#003D73] text-white p-5 rounded-2xl text-sm shadow-sm border border-white/10 space-y-3">
-                                <div className="flex gap-3">
-                                    <div className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 font-bold text-xs ${ans.isCorrect ? 'bg-green-500' : 'bg-red-500'}`}>
-                                        {idx + 1}
-                                    </div>
-                                    <p className="font-bold text-base text-white leading-snug">{q.text}</p>
-                                </div>
-
-                                <div className="bg-black/20 rounded-xl p-3 space-y-2">
-                                    <div className="flex items-start gap-2">
-                                        <div className="min-w-[80px] text-xs font-bold uppercase tracking-wide text-white/50 mt-0.5">You Chose</div>
-                                        <div className={`font-bold ${ans.isCorrect ? 'text-green-400' : isTimeOut ? 'text-orange-400 flex items-center' : 'text-red-400'}`}>
-                                            {isTimeOut && <Clock size={14} className="inline mr-1" />}
-                                            {userAnswerText}
-                                            {ans.isCorrect && <Check size={14} className="inline ml-2"/>}
-                                            {!ans.isCorrect && !isTimeOut && <X size={14} className="inline ml-2"/>}
-                                        </div>
-                                    </div>
-                                    
-                                    {!ans.isCorrect && (
-                                        <div className="flex items-start gap-2 border-t border-white/5 pt-2">
-                                            <div className="min-w-[80px] text-xs font-bold uppercase tracking-wide text-white/50 mt-0.5">Correct</div>
-                                            <div className="font-bold text-green-400">
-                                                {correctAnswerText} <Check size={14} className="inline ml-2"/>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="flex gap-2 text-xs text-blue-200 italic bg-white/5 p-3 rounded-lg border border-white/5">
-                                    <Lightbulb size={14} className="flex-shrink-0 text-yellow-400"/>
-                                    <span>{q.fact}</span>
-                                </div>
-                            </div>
-                        )
-                    })}
-                 </div>
-             )}
+        <h2 className="text-2xl font-bold text-[#0057A0] mb-2 font-heading">Manager Access</h2>
+        <p className="text-slate-500 text-sm mb-6">Enter secure password to continue</p>
+        
+        <div className="relative mb-6">
+            <input 
+                type="password" 
+                value={pass} 
+                onChange={e => setPass(e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-lg text-center font-bold text-slate-800 focus:outline-none focus:border-[#0057A0] focus:ring-4 focus:ring-blue-50 transition-all"
+                placeholder="Password"
+            />
         </div>
-
-        <div className="w-full grid grid-cols-2 gap-4">
-            <Button onClick={onHome} className="shadow-lg bg-[#0057A0] text-white border-[#003D73]">Home</Button>
-            <Button onClick={onHome} className="shadow-lg bg-[#0057A0] text-white border-[#003D73]">Play Again</Button>
-        </div>
+        
+        <Button onClick={checkPass} fullWidth className="shadow-lg">Unlock Dashboard</Button>
+        <button onClick={onBack} className="mt-6 text-slate-400 text-sm font-bold hover:text-[#0057A0] transition">Return to Game</button>
+      </div>
     </div>
   );
 };
 
 const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
-  const [stats, setStats] = useState<any[]>([]);
-  const [allResults, setAllResults] = useState<GameResult[]>([]);
+  const [stats, setStats] = useState<PlayerStats[]>([]);
+  const [activeTab, setActiveTab] = useState<'overview' | 'questions' | 'learn' | 'users'>('overview');
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [learningModules, setLearningModules] = useState<LearningModule[]>([]);
-  const [activeTab, setActiveTab] = useState<'stats' | 'questions' | 'learning'>('stats');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [genCategory, setGenCategory] = useState<Category>(Category.NorthernLights);
+  const [modules, setModules] = useState<LearningModule[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+
+  // Search & Filter State
+  const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState<string>('All');
-  const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Manual Add State
-  const [newQ, setNewQ] = useState<Partial<Question>>({
-      text: '', options: ['', '', ''], correctIndex: 0, fact: '', difficulty: Difficulty.Medium, category: Category.NorthernLights
-  });
+  // New Question State
+  const [isAdding, setIsAdding] = useState(false);
+  const [newQ, setNewQ] = useState<Partial<Question>>({ category: Category.NorthernLights, difficulty: Difficulty.Medium, options: ['', '', ''], correctIndex: 0 });
 
-  // Learning Editor State
-  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
+  // AI State
+  const [aiPrompt, setAiPrompt] = useState({ category: Category.NorthernLights, difficulty: Difficulty.Medium, count: 5 });
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Course Editor State
+  const [isEditingModule, setIsEditingModule] = useState<string | null>(null);
+  const [newModule, setNewModule] = useState<Partial<LearningModule>>({ category: Category.General, description: '', units: [] });
+  const [editingUnitId, setEditingUnitId] = useState<string | null>(null);
 
   useEffect(() => {
     setStats(getAllStats());
     setQuestions(getQuestions());
-    setAllResults(getAllResults());
-    setLearningModules(getLearningModules());
-  }, []);
+    setModules(getLearningModules());
+    
+    const fetchUsers = async () => {
+        const u = await getAllUsers();
+        setUsers(u);
+    };
+    if (activeTab === 'users') fetchUsers();
 
-  const refreshLearning = () => {
-      setLearningModules(getLearningModules());
-  }
+  }, [activeTab]);
 
-  const handleDeleteQuestion = async (id: string) => {
-      if (confirm("Are you sure?")) {
-          await deleteQuestion(id);
-          setQuestions(getQuestions());
-      }
-  };
-
-  const handleManualAdd = async () => {
-      if (!newQ.text || !newQ.options?.[0] || !newQ.options?.[1] || !newQ.options?.[2] || !newQ.fact) {
-          alert("Please fill in all fields");
-          return;
-      }
-      await addQuestion({
-          id: uuidv4(),
-          text: newQ.text,
-          options: newQ.options,
-          correctIndex: newQ.correctIndex || 0,
-          fact: newQ.fact,
-          category: newQ.category || Category.General,
-          difficulty: newQ.difficulty || Difficulty.Medium
-      });
+  const handleDelete = async (id: string) => {
+    if (window.confirm("Delete this question?")) {
+      await deleteQuestion(id);
       setQuestions(getQuestions());
-      setNewQ({ text: '', options: ['', '', ''], correctIndex: 0, fact: '', difficulty: Difficulty.Medium, category: Category.NorthernLights });
-      alert("Question added!");
+    }
   };
 
-  const handleGenerate = async () => {
-      setIsGenerating(true);
-      try {
-          const newQs = await generateQuestionsWithAI(genCategory, Difficulty.Medium, 5);
-          for(const q of newQs) {
-            await addQuestion(q);
-          }
-          setQuestions(getQuestions());
-          alert(`Added ${newQs.length} new questions!`);
-      } catch (e) {
-          alert("Error generating questions.");
-      } finally {
-          setIsGenerating(false);
+  const handleSaveNew = async () => {
+    if (newQ.text && newQ.options && newQ.fact) {
+      await addQuestion({ ...newQ, id: Date.now().toString() } as Question);
+      setIsAdding(false);
+      setQuestions(getQuestions());
+      setNewQ({ category: Category.NorthernLights, difficulty: Difficulty.Medium, options: ['', '', ''], correctIndex: 0 });
+    }
+  };
+
+  const handleGenerateAI = async () => {
+    setIsGenerating(true);
+    try {
+      const generated = await generateQuestionsWithAI(aiPrompt.category, aiPrompt.difficulty, aiPrompt.count);
+      for (const q of generated) {
+        await addQuestion(q);
       }
+      setQuestions(getQuestions());
+      alert(`Successfully added ${generated.length} questions!`);
+    } catch (e) {
+      alert("AI Generation failed. Check API Key.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
-  const categoryStats = allResults.reduce((acc, curr) => {
-      const cat = curr.config.category;
-      acc[cat] = (acc[cat] || 0) + 1;
-      return acc;
-  }, {} as Record<string, number>);
-  const pieData = Object.keys(categoryStats).map(key => ({ name: key, value: categoryStats[key] }));
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
-  
-  const filteredQuestions = questions.filter(q => {
-    const matchesCategory = filterCategory === 'All' || q.category === filterCategory;
-    const matchesSearch = q.text.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          q.category.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
-
-  const inputClasses = "w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-slate-700 font-medium focus:outline-none focus:border-[#0057A0] focus:ring-4 focus:ring-[#0057A0]/10 transition-all placeholder:text-slate-400 appearance-none";
-  const labelClasses = "block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1";
-
-  // --- Learning Editor Logic ---
-  const handleCreateModule = async () => {
-      const newMod: LearningModule = {
-          id: uuidv4(),
-          category: Category.General,
-          description: "New Learning Module",
-          units: []
+  // --- Course Editor Handlers ---
+  const handleSaveModule = async () => {
+      if (!newModule.category || !newModule.description) return;
+      const mod: LearningModule = {
+          id: newModule.id || `mod-${Date.now()}`,
+          category: newModule.category,
+          description: newModule.description,
+          units: newModule.units || []
       };
-      const updated = [...learningModules, newMod];
-      setLearningModules(updated);
-      await saveLearningModules(updated);
-      setEditingModuleId(newMod.id);
+      
+      const updatedModules = isEditingModule 
+        ? modules.map(m => m.id === mod.id ? mod : m)
+        : [...modules, mod];
+      
+      await saveLearningModules(updatedModules);
+      setModules(updatedModules);
+      setIsEditingModule(null);
+      setNewModule({ category: Category.General, description: '', units: [] });
   };
 
   const handleDeleteModule = async (id: string) => {
-      if (confirm("Delete this entire module?")) {
-        const updated = learningModules.filter(m => m.id !== id);
-        setLearningModules(updated);
-        if(editingModuleId === id) setEditingModuleId(null);
-        await deleteLearningModuleFromCloud(id);
-        await saveLearningModules(updated); // Saves the remaining array to local
+      if(window.confirm("Delete this entire module?")) {
+          await deleteLearningModuleFromCloud(id);
+          const updated = modules.filter(m => m.id !== id);
+          setModules(updated);
+          saveLearningModules(updated);
       }
   }
 
-  const updateModule = async (mod: LearningModule) => {
-      const updated = learningModules.map(m => m.id === mod.id ? mod : m);
-      setLearningModules(updated);
-      // We only need to save THIS module to the cloud
-      await saveLearningModules([mod]); 
-  }
+  const handleAddUnit = () => {
+      const newUnit: LearningUnit = { id: `unit-${Date.now()}`, title: "New Unit", duration: "1 min", type: 'text', content: "" };
+      setNewModule({ ...newModule, units: [...(newModule.units || []), newUnit] });
+      setEditingUnitId(newUnit.id);
+  };
 
-  const editingModule = learningModules.find(m => m.id === editingModuleId);
+  const handleUpdateUnit = (id: string, updates: Partial<LearningUnit>) => {
+      const updatedUnits = newModule.units?.map(u => u.id === id ? { ...u, ...updates } : u);
+      setNewModule({ ...newModule, units: updatedUnits });
+  };
+
+  const handleMoveUnit = (index: number, direction: 'up' | 'down') => {
+      if (!newModule.units) return;
+      const newUnits = [...newModule.units];
+      if (direction === 'up' && index > 0) {
+          [newUnits[index], newUnits[index-1]] = [newUnits[index-1], newUnits[index]];
+      } else if (direction === 'down' && index < newUnits.length - 1) {
+          [newUnits[index], newUnits[index+1]] = [newUnits[index+1], newUnits[index]];
+      }
+      setNewModule({ ...newModule, units: newUnits });
+  };
+
+  const handleDeleteUnit = (index: number) => {
+       const newUnits = newModule.units?.filter((_, i) => i !== index);
+       setNewModule({ ...newModule, units: newUnits });
+  };
+
+  // Filtered Questions
+  const filteredQuestions = questions.filter(q => {
+      const matchesSearch = q.text.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesCategory = filterCategory === 'All' || q.category === filterCategory;
+      return matchesSearch && matchesCategory;
+  });
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-10 font-sans">
-        <div className="bg-white border-b px-6 py-4 sticky top-0 z-40 flex justify-between items-center shadow-sm">
-            <div className="flex items-center gap-2 text-[#0057A0]"><Building2 className="fill-current" /><h1 className="text-xl font-heading font-bold">Manager Board</h1></div>
-            <button onClick={onLogout} className="text-gray-500 hover:text-red-500 font-medium text-sm">Log Out</button>
-        </div>
-
-        <div className="max-w-6xl mx-auto p-6">
-            <div className="flex p-1 bg-gray-200 rounded-xl w-fit mb-8">
-                <button onClick={() => setActiveTab('stats')} className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'stats' ? 'bg-white text-[#0057A0] shadow-sm' : 'text-gray-500'}`}>Overview</button>
-                <button onClick={() => setActiveTab('questions')} className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'questions' ? 'bg-white text-[#0057A0] shadow-sm' : 'text-gray-500'}`}>Question Bank</button>
-                <button onClick={() => setActiveTab('learning')} className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'learning' ? 'bg-white text-[#0057A0] shadow-sm' : 'text-gray-500'}`}>Course Editor</button>
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
+      {/* Header */}
+      <div className="bg-white sticky top-0 z-40 shadow-sm border-b border-slate-200">
+         <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+                <div className="bg-[#0057A0] p-2 rounded-lg text-white"><Settings size={24} /></div>
+                <h1 className="text-xl font-heading font-bold text-slate-800">Manager Board</h1>
             </div>
+            <button onClick={onLogout} className="text-sm font-bold text-slate-500 hover:text-[#0057A0]">Log Out</button>
+         </div>
+         
+         {/* Tabs */}
+         <div className="max-w-5xl mx-auto px-6 flex gap-6 overflow-x-auto custom-scrollbar-blue">
+            {[
+                { id: 'overview', label: 'Overview', icon: PieChart },
+                { id: 'users', label: 'Staff Users', icon: Users },
+                { id: 'questions', label: 'Question Bank', icon: Building2 },
+                { id: 'learn', label: 'Course Editor', icon: BookOpen }
+            ].map(tab => (
+                <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as any)}
+                    className={`flex items-center gap-2 py-4 border-b-4 transition-all font-bold whitespace-nowrap ${activeTab === tab.id ? 'border-[#0057A0] text-[#0057A0]' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                >
+                    <tab.icon size={18} /> {tab.label}
+                </button>
+            ))}
+         </div>
+      </div>
 
-            {activeTab === 'stats' && (
-                <div className="space-y-6 animate-fade-in">
-                     {/* (Stats View Code - same as before) */}
-                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Total Games</p>
-                            <p className="text-3xl font-bold text-slate-800 mt-1">{allResults.length}</p>
-                        </div>
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                             <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Unique Players</p>
-                             <p className="text-3xl font-bold text-slate-800 mt-1">{stats.length}</p>
-                        </div>
-                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                             <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Avg Score</p>
-                             <p className="text-3xl font-bold text-slate-800 mt-1">{allResults.length > 0 ? Math.round(allResults.reduce((acc, cur) => acc + cur.score, 0) / allResults.length) : 0}/10</p>
-                        </div>
-                    </div>
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                         <h2 className="font-bold text-lg mb-4">Popular Categories</h2>
-                         <div className="h-[300px]"><ResponsiveContainer width="100%" height="100%"><RePie><Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">{pieData.map((entry, index) => (<Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />))}</Pie><Tooltip /></RePie></ResponsiveContainer></div>
+      <div className="max-w-5xl mx-auto p-6">
+        
+        {/* OVERVIEW TAB */}
+        {activeTab === 'overview' && (
+           <div className="space-y-6 animate-fade-in">
+               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                       <div className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Total Games</div>
+                       <div className="text-4xl font-black text-[#0057A0]">{stats.reduce((acc, s) => acc + s.totalGames, 0)}</div>
+                   </div>
+                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                       <div className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Avg Score</div>
+                       <div className="text-4xl font-black text-[#30C050]">
+                         {stats.length > 0 ? (stats.reduce((acc, s) => acc + s.totalScore, 0) / stats.reduce((acc, s) => acc + s.totalGames, 0)).toFixed(1) : 0}
+                       </div>
+                   </div>
+                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                       <div className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Questions in Bank</div>
+                       <div className="text-4xl font-black text-orange-500">{questions.length}</div>
+                   </div>
+               </div>
+
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                   <h3 className="font-heading font-bold text-lg mb-6">Player Performance</h3>
+                   <div className="overflow-x-auto">
+                       <table className="w-full text-sm text-left">
+                           <thead className="text-xs text-slate-400 uppercase bg-slate-50">
+                               <tr>
+                                   <th className="px-4 py-3 rounded-l-lg">Username</th>
+                                   <th className="px-4 py-3">Games</th>
+                                   <th className="px-4 py-3">Total Score</th>
+                                   <th className="px-4 py-3">Best Streak</th>
+                                   <th className="px-4 py-3 rounded-r-lg">Fav Category</th>
+                               </tr>
+                           </thead>
+                           <tbody className="font-medium text-slate-600">
+                               {stats.map(s => (
+                                   <tr key={s.username} className="border-b border-slate-50 hover:bg-slate-50 transition">
+                                       <td className="px-4 py-4 font-bold text-[#0057A0]">{s.username}</td>
+                                       <td className="px-4 py-4">{s.totalGames}</td>
+                                       <td className="px-4 py-4">{s.totalScore}</td>
+                                       <td className="px-4 py-4">{s.streakRecord}</td>
+                                       <td className="px-4 py-4">{s.bestCategory}</td>
+                                   </tr>
+                               ))}
+                           </tbody>
+                       </table>
+                   </div>
+               </div>
+           </div>
+        )}
+
+        {/* USERS TAB */}
+        {activeTab === 'users' && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden animate-fade-in">
+                <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                    <h3 className="font-heading font-bold text-lg">Registered Staff</h3>
+                    <span className="bg-blue-100 text-[#0057A0] px-3 py-1 rounded-full text-xs font-bold">{users.length} Users</span>
+                </div>
+                <table className="w-full text-sm text-left">
+                    <thead className="text-xs text-slate-400 uppercase bg-slate-50">
+                        <tr>
+                            <th className="px-6 py-3">Avatar</th>
+                            <th className="px-6 py-3">Name</th>
+                            <th className="px-6 py-3">Email</th>
+                            <th className="px-6 py-3">Joined</th>
+                            <th className="px-6 py-3">Last Login</th>
+                        </tr>
+                    </thead>
+                    <tbody className="font-medium text-slate-600">
+                        {users.map(u => (
+                            <tr key={u.uid} className="border-b border-slate-50 hover:bg-slate-50">
+                                <td className="px-6 py-4"><AvatarDisplay avatarId={u.avatarId} size="sm" /></td>
+                                <td className="px-6 py-4 font-bold text-[#0057A0]">{u.displayName}</td>
+                                <td className="px-6 py-4">{u.email}</td>
+                                <td className="px-6 py-4">{new Date(u.createdAt).toLocaleDateString()}</td>
+                                <td className="px-6 py-4">{new Date(u.lastLogin).toLocaleDateString()}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        )}
+
+        {/* QUESTION BANK TAB */}
+        {activeTab === 'questions' && (
+            <div className="space-y-6 animate-fade-in">
+                {/* AI Generator */}
+                <div className="bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl p-8 text-white relative overflow-hidden shadow-lg z-30">
+                    <div className="absolute top-0 right-0 p-8 opacity-10"><BrainCircuit size={120}/></div>
+                    <h3 className="text-2xl font-heading font-bold mb-2 relative z-10">AI Question Generator</h3>
+                    <p className="text-blue-200 mb-6 relative z-10 max-w-lg">Instantly generate scientifically accurate trivia questions for any category using Gemini AI.</p>
+                    
+                    <div className="flex flex-col md:flex-row gap-4 relative z-10">
+                         <CustomSelect 
+                           value={aiPrompt.category} 
+                           options={Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))}
+                           onChange={(v) => setAiPrompt({...aiPrompt, category: v})}
+                           className="w-full md:w-64"
+                           zIndex={100}
+                         />
+                         <CustomSelect 
+                           value={aiPrompt.difficulty} 
+                           options={Object.values(Difficulty).map(d => ({ label: d, value: d }))}
+                           onChange={(v) => setAiPrompt({...aiPrompt, difficulty: v})}
+                           className="w-full md:w-48"
+                           zIndex={90}
+                         />
+                         <Button onClick={handleGenerateAI} disabled={isGenerating} className="shadow-xl bg-yellow-400 hover:bg-yellow-500 text-slate-900 border-yellow-600">
+                             {isGenerating ? <><Loader2 className="animate-spin" size={20}/> Generating...</> : <><Sparkles size={20}/> Generate 5 Questions</>}
+                         </Button>
                     </div>
                 </div>
-            )}
 
-            {activeTab === 'questions' && (
-                <div className="space-y-6 animate-fade-in">
-                     {/* (Manual Entry Form & Question List - same as before) */}
-                     <div className="bg-white p-8 rounded-3xl shadow-xl border border-blue-100 relative">
-                        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#0057A0] to-[#003D73] rounded-t-3xl"></div>
-                        <h2 className="font-heading font-bold text-2xl mb-6 text-slate-800 flex items-center gap-3 pt-2">
-                            <div className="bg-blue-100 p-2 rounded-xl text-[#0057A0]">
-                                <PlusCircle size={24} />
-                            </div>
-                            Add New Question
-                        </h2>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                            <div>
-                                <CustomSelect label="Category" value={newQ.category || Category.NorthernLights} options={Object.values(Category).map(c => ({ label: c, value: c }))} onChange={(val) => setNewQ({...newQ, category: val})} zIndex={60} />
-                            </div>
-                            <div>
-                                <CustomSelect label="Difficulty" value={newQ.difficulty || Difficulty.Medium} options={Object.values(Difficulty).map(d => ({ label: d, value: d }))} onChange={(val) => setNewQ({...newQ, difficulty: val})} zIndex={50} />
-                            </div>
-                        </div>
-                        <div className="mb-6"><label className={labelClasses}>Question Text</label><input className={inputClasses} placeholder="e.g. What is the capital of Iceland?" value={newQ.text} onChange={e => setNewQ({...newQ, text: e.target.value})} /></div>
-                        <div className="mb-6"><label className={labelClasses}>Answer Options</label><div className="grid grid-cols-1 md:grid-cols-3 gap-4">{[0,1,2].map(i => (<div key={i} className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-[#0057A0] text-sm">{String.fromCharCode(65+i)}</span><input className={`${inputClasses} pl-10`} placeholder={`Option ${String.fromCharCode(65+i)}`} value={newQ.options?.[i]} onChange={e => {const ops = [...(newQ.options || [])]; ops[i] = e.target.value; setNewQ({...newQ, options: ops})}} /></div>))}</div></div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8"><div><CustomSelect label="Correct Answer" value={newQ.correctIndex || 0} options={[{ label: 'Option A', value: 0 }, { label: 'Option B', value: 1 }, { label: 'Option C', value: 2 }]} onChange={(val) => setNewQ({...newQ, correctIndex: Number(val)})} zIndex={40} /></div><div><label className={labelClasses}>Did You Know?</label><input className={inputClasses} placeholder="Short interesting fact..." value={newQ.fact} onChange={e => setNewQ({...newQ, fact: e.target.value})} /></div></div>
-                        <Button fullWidth onClick={handleManualAdd} className="shadow-lg text-lg bg-[#0057A0] hover:bg-[#003D73]">Save Question</Button>
-                     </div>
-
-                     <div className="bg-gradient-to-br from-[#0057A0] to-[#003D73] p-6 rounded-2xl text-white shadow-lg relative overflow-visible z-30">
-                        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-4">
-                            <div><h2 className="font-bold text-xl">AI Question Generator</h2><p className="text-blue-100 text-sm">Generate new questions instantly.</p></div>
-                            <div className="flex gap-2 items-center"><div className="w-48"><CustomSelect value={genCategory} options={Object.values(Category).map(c => ({ label: c, value: c }))} onChange={(val) => setGenCategory(val)} zIndex={100} /></div><Button onClick={handleGenerate} disabled={isGenerating} className="bg-yellow-400 text-slate-900 hover:bg-yellow-300 border-yellow-500 font-bold shadow-md whitespace-nowrap h-[50px]">{isGenerating ? "Generating..." : "Generate 5"}</Button></div>
-                        </div>
-                     </div>
-
-                     <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100">
-                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6">
-                            <div><h2 className="font-heading font-bold text-2xl text-slate-800">Question Database</h2><p className="text-slate-500 font-medium mt-1">Total Questions: <span className="text-[#0057A0] font-bold">{filteredQuestions.length}</span></p></div>
-                            <div className="flex flex-col md:flex-row w-full lg:w-auto gap-4">
-                                <div className="relative flex-1 md:w-72"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} /><input type="text" placeholder="Search questions..." className="w-full pl-12 pr-4 py-3 rounded-2xl border-2 border-slate-100 bg-slate-50 text-slate-700 font-semibold focus:bg-white focus:border-[#0057A0] focus:ring-4 focus:ring-[#0057A0]/10 transition-all outline-none placeholder:text-slate-400" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
-                                <div className="relative md:w-56 z-20"><CustomSelect value={filterCategory} options={[{ label: 'All Categories', value: 'All' }, ...Object.values(Category).map(c => ({ label: c, value: c }))]} onChange={(val) => setFilterCategory(val)} zIndex={20} /></div>
-                            </div>
-                        </div>
-                        <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar-blue">
-                            {filteredQuestions.length === 0 ? <div className="flex flex-col items-center justify-center py-16 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl bg-slate-50"><Search size={48} className="mb-4 opacity-20" /><p className="font-medium text-lg">No questions found</p></div> : filteredQuestions.map((q) => (<div key={q.id} className="group bg-white p-6 rounded-2xl border border-slate-200 hover:border-blue-200 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 flex flex-col sm:flex-row gap-4 justify-between items-start"><div className="flex-1"><div className="flex flex-wrap gap-2 mb-3"><span className="px-3 py-1 bg-blue-50 text-[#0057A0] text-[10px] font-extrabold uppercase rounded-full tracking-wider">{q.category}</span><span className={`px-3 py-1 text-[10px] font-extrabold uppercase rounded-full tracking-wider ${q.difficulty === 'Easy' ? 'bg-green-50 text-green-600' : q.difficulty === 'Medium' ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{q.difficulty}</span></div><h3 className="font-bold text-slate-800 text-lg mb-2 leading-snug">{q.text}</h3><div className="flex items-center gap-2 text-sm font-medium text-slate-500"><Check size={16} className="text-green-500" /><span>Answer:</span><span className="text-slate-900 font-bold">{q.options[q.correctIndex]}</span></div></div><button onClick={() => handleDeleteQuestion(q.id)} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all self-end sm:self-start"><Trash2 size={20}/></button></div>))}
-                        </div>
-                     </div>
-                </div>
-            )}
-
-            {activeTab === 'learning' && (
-                <div className="space-y-6 animate-fade-in">
-                    {/* Header Block */}
-                     <div className="bg-gradient-to-br from-[#0057A0] to-[#003D73] p-8 rounded-3xl shadow-lg text-white relative overflow-hidden">
-                        <div className="relative z-10">
-                            <h2 className="font-heading font-bold text-2xl mb-2 flex items-center gap-2">
-                                <BookOpen size={28} className="text-blue-200"/> Learning Modules
-                            </h2>
-                            <p className="text-blue-100">Manage courses, flashcards, and learning paths.</p>
-                        </div>
-                     </div>
-
-                    {/* Create Module Button */}
-                    <div className="flex justify-end">
-                        <Button onClick={handleCreateModule} className="bg-[#30C050] border-green-700 hover:bg-green-600 shadow-md text-lg px-6">
-                            <PlusCircle className="mr-2" size={20}/> Create New Module
-                        </Button>
+                {/* Filters & Search */}
+                <div className="flex flex-col md:flex-row gap-4 z-20 relative">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                        <input 
+                           type="text" 
+                           placeholder="Search questions..." 
+                           value={searchTerm}
+                           onChange={(e) => setSearchTerm(e.target.value)}
+                           className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:border-[#0057A0]"
+                        />
                     </div>
+                    <CustomSelect 
+                        value={filterCategory}
+                        options={[{label: 'All Categories', value: 'All'}, ...Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))]}
+                        onChange={setFilterCategory}
+                        className="w-full md:w-64"
+                    />
+                     <Button onClick={() => setIsAdding(!isAdding)} className="whitespace-nowrap">
+                        {isAdding ? 'Cancel' : 'Add Manual Question'}
+                    </Button>
+                </div>
 
-                    {/* List of Modules */}
-                    <div className="grid gap-6">
-                        {learningModules.map(mod => (
-                            <div key={mod.id} className="bg-white rounded-3xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow overflow-visible group">
-                                <div className="p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-gray-50">
-                                    <div className="flex items-center gap-5 flex-1">
-                                        <div className="bg-blue-50 p-4 rounded-2xl text-[#0057A0] shadow-sm group-hover:scale-105 transition-transform">
-                                            <CategoryIcon category={mod.category} size={32} />
+                {/* Add Manual Question Form */}
+                {isAdding && (
+                    <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-blue-50 animate-slide-up">
+                        <h3 className="font-bold text-lg text-[#0057A0] mb-4">New Question Details</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <CustomSelect 
+                                label="Category"
+                                value={newQ.category || ''}
+                                options={Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))}
+                                onChange={v => setNewQ({...newQ, category: v})}
+                            />
+                            <CustomSelect 
+                                label="Difficulty"
+                                value={newQ.difficulty || ''}
+                                options={Object.values(Difficulty).map(d => ({ label: d, value: d }))}
+                                onChange={v => setNewQ({...newQ, difficulty: v})}
+                            />
+                        </div>
+                        <div className="space-y-4">
+                             <div>
+                                <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1">Question Text</label>
+                                <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-[#0057A0] outline-none font-medium" value={newQ.text || ''} onChange={e => setNewQ({...newQ, text: e.target.value})} placeholder="e.g., What is the capital of Iceland?" />
+                             </div>
+                             
+                             <div>
+                                <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1">Answer Options</label>
+                                <div className="grid grid-cols-1 gap-3">
+                                    {[0, 1, 2].map(idx => (
+                                        <div key={idx} className="flex items-center gap-3">
+                                            <button onClick={() => setNewQ({...newQ, correctIndex: idx})} className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition ${newQ.correctIndex === idx ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300 text-slate-300 hover:border-green-400'}`}>
+                                                <Check size={16} />
+                                            </button>
+                                            <input className={`flex-1 p-3 border rounded-xl focus:border-[#0057A0] outline-none font-medium ${newQ.correctIndex === idx ? 'bg-green-50 border-green-200 text-green-800' : 'bg-slate-50 border-slate-200'}`} value={newQ.options?.[idx] || ''} onChange={e => { const newOpts = [...(newQ.options || [])]; newOpts[idx] = e.target.value; setNewQ({...newQ, options: newOpts}); }} placeholder={`Option ${idx + 1}`} />
                                         </div>
-                                        {editingModuleId === mod.id ? (
-                                            <div className="space-y-3 flex-1 max-w-md">
-                                                <CustomSelect 
-                                                    value={mod.category} 
-                                                    options={Object.values(Category).map(c => ({label:c, value:c}))} 
-                                                    onChange={(v) => updateModule({...mod, category: v})} 
-                                                    zIndex={60}
-                                                />
-                                                <input 
-                                                    className={inputClasses}
-                                                    value={mod.description}
-                                                    onChange={(e) => updateModule({...mod, description: e.target.value})}
-                                                    placeholder="Module Description"
-                                                />
-                                            </div>
-                                        ) : (
-                                            <div>
-                                                <h3 className="font-bold text-xl text-slate-800 mb-1">{mod.category}</h3>
-                                                <p className="text-slate-500 text-sm font-medium mb-2">{mod.description}</p>
-                                                <span className="text-[10px] font-extrabold text-[#0057A0] bg-blue-50 px-3 py-1 rounded-full uppercase tracking-wider">{mod.units.length} Learning Units</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2 self-end md:self-auto">
-                                        <Button size="sm" variant={editingModuleId === mod.id ? "success" : "secondary"} onClick={() => setEditingModuleId(editingModuleId === mod.id ? null : mod.id)}>
-                                            {editingModuleId === mod.id ? "Done" : "Edit Content"}
-                                        </Button>
-                                        <Button size="sm" variant="danger" onClick={() => handleDeleteModule(mod.id)}><Trash2 size={16}/></Button>
-                                    </div>
+                                    ))}
                                 </div>
+                             </div>
 
-                                {/* Expanded Editor */}
-                                {editingModuleId === mod.id && (
-                                    <div className="p-8 bg-slate-50 rounded-b-3xl border-t border-slate-100">
-                                        <div className="flex justify-between items-center mb-6">
-                                            <h4 className="text-xs font-bold text-[#0057A0] uppercase tracking-widest flex items-center gap-2">
-                                                <BrainCircuit size={16}/> Learning Path Structure
-                                            </h4>
-                                            <Button size="sm" variant="outline" className="border-slate-300 text-slate-600 hover:bg-white bg-white shadow-sm" onClick={() => {
-                                                const newUnit: LearningUnit = {
-                                                    id: uuidv4(),
-                                                    title: "New Unit",
-                                                    duration: "1 min",
-                                                    type: 'text',
-                                                    content: ""
-                                                };
-                                                updateModule({...mod, units: [...mod.units, newUnit]});
-                                            }}>
-                                                + Add Step
-                                            </Button>
-                                        </div>
+                             <div>
+                                <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1">"Did You Know?" Fact</label>
+                                <textarea className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-[#0057A0] outline-none font-medium" rows={2} value={newQ.fact || ''} onChange={e => setNewQ({...newQ, fact: e.target.value})} placeholder="Fun fact to show after answering..." />
+                             </div>
 
-                                        <div className="space-y-6">
-                                            {mod.units.length === 0 && (
-                                                <div className="text-center py-12 text-slate-400 bg-white rounded-2xl border-2 border-dashed border-slate-200">
-                                                    <p>No units yet. Add a step to begin.</p>
-                                                </div>
-                                            )}
-                                            {mod.units.map((unit, idx) => (
-                                                <div key={unit.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-200 transition-colors relative group/unit">
-                                                    <div className="absolute -left-3 top-8 w-6 h-6 bg-white border-2 border-blue-100 rounded-full flex items-center justify-center text-xs font-bold text-blue-300">{idx + 1}</div>
-                                                    
-                                                    <div className="flex flex-col gap-6">
-                                                        {/* Unit Header Controls */}
-                                                        <div className="flex flex-col md:flex-row gap-4 items-start">
-                                                            <div className="flex-1 w-full space-y-4">
-                                                                <div className="flex gap-4">
-                                                                    <div className="flex-1">
-                                                                        <label className={labelClasses}>Unit Title</label>
-                                                                        <input 
-                                                                            className={inputClasses}
-                                                                            value={unit.title}
-                                                                            onChange={(e) => {
-                                                                                const newUnits = [...mod.units];
-                                                                                newUnits[idx] = { ...unit, title: e.target.value };
-                                                                                updateModule({ ...mod, units: newUnits });
-                                                                            }}
-                                                                            placeholder="e.g. Intro to Glaciers"
-                                                                        />
-                                                                    </div>
-                                                                    <div className="w-32">
-                                                                        <label className={labelClasses}>Duration</label>
-                                                                        <input 
-                                                                            className={inputClasses}
-                                                                            value={unit.duration}
-                                                                            onChange={(e) => {
-                                                                                const newUnits = [...mod.units];
-                                                                                newUnits[idx] = { ...unit, duration: e.target.value };
-                                                                                updateModule({ ...mod, units: newUnits });
-                                                                            }}
-                                                                            placeholder="2 min"
-                                                                        />
-                                                                    </div>
-                                                                </div>
-                                                                <div className="w-full">
-                                                                    <CustomSelect 
-                                                                        label="Content Type"
-                                                                        value={unit.type}
-                                                                        options={[
-                                                                            {label: 'Read (Text)', value: 'text'},
-                                                                            {label: 'Flashcards', value: 'flashcards'},
-                                                                            {label: 'Quiz', value: 'quiz'}
-                                                                        ]}
-                                                                        onChange={(val) => {
-                                                                            const newUnits = [...mod.units];
-                                                                            newUnits[idx] = { ...unit, type: val };
-                                                                            updateModule({ ...mod, units: newUnits });
-                                                                        }}
-                                                                        zIndex={40 - idx}
-                                                                    />
-                                                                </div>
-                                                            </div>
+                             <Button fullWidth onClick={handleSaveNew} className="mt-2">Save Question to Bank</Button>
+                        </div>
+                    </div>
+                )}
 
-                                                            {/* Reorder Controls */}
-                                                            <div className="flex gap-1 bg-slate-50 p-1 rounded-xl border border-slate-100">
-                                                                <button className="p-2 hover:bg-white hover:text-[#0057A0] hover:shadow-sm rounded-lg text-slate-400 transition-all" onClick={() => {
-                                                                    if (idx === 0) return;
-                                                                    const newUnits = [...mod.units];
-                                                                    [newUnits[idx], newUnits[idx-1]] = [newUnits[idx-1], newUnits[idx]];
-                                                                    updateModule({...mod, units: newUnits});
-                                                                }}><ArrowUp size={18}/></button>
-                                                                <button className="p-2 hover:bg-white hover:text-[#0057A0] hover:shadow-sm rounded-lg text-slate-400 transition-all" onClick={() => {
-                                                                    if (idx === mod.units.length - 1) return;
-                                                                    const newUnits = [...mod.units];
-                                                                    [newUnits[idx], newUnits[idx+1]] = [newUnits[idx+1], newUnits[idx]];
-                                                                    updateModule({...mod, units: newUnits});
-                                                                }}><ArrowDown size={18}/></button>
-                                                                <div className="w-px bg-slate-200 mx-1 my-1"></div>
-                                                                <button className="p-2 hover:bg-red-50 hover:text-red-500 rounded-lg text-slate-300 transition-all" onClick={() => {
-                                                                    const newUnits = mod.units.filter((_, i) => i !== idx);
-                                                                    updateModule({...mod, units: newUnits});
-                                                                }}><Trash2 size={18}/></button>
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        {/* Content Editor Area */}
-                                                        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200/60">
-                                                            {unit.type === 'text' && (
-                                                                <div>
-                                                                    <label className={labelClasses}>Reading Content</label>
-                                                                    <textarea 
-                                                                        className={`${inputClasses} h-32 resize-none`}
-                                                                        value={unit.content || ''}
-                                                                        onChange={(e) => {
-                                                                            const newUnits = [...mod.units];
-                                                                            newUnits[idx] = { ...unit, content: e.target.value };
-                                                                            updateModule({ ...mod, units: newUnits });
-                                                                        }}
-                                                                        placeholder="Enter the educational text here..."
-                                                                    />
-                                                                </div>
-                                                            )}
-                                                            {unit.type === 'flashcards' && (
-                                                                <div className="space-y-4">
-                                                                    <label className={labelClasses}>Flashcards Deck</label>
-                                                                    {(unit.flashcards || []).map((card, cIdx) => (
-                                                                        <div key={cIdx} className="flex flex-col md:flex-row gap-3 items-start bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
-                                                                            <div className="flex-1 w-full">
-                                                                                <span className="text-[10px] font-bold text-slate-400 uppercase mb-1 block ml-1">Front</span>
-                                                                                <input className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium" placeholder="Question/Term" value={card.front} onChange={(e) => {
-                                                                                    const newUnits = [...mod.units];
-                                                                                    const newCards = [...(unit.flashcards || [])];
-                                                                                    newCards[cIdx] = { ...card, front: e.target.value };
-                                                                                    newUnits[idx] = { ...unit, flashcards: newCards };
-                                                                                    updateModule({...mod, units: newUnits});
-                                                                                }}/>
-                                                                            </div>
-                                                                            <div className="flex-1 w-full">
-                                                                                <span className="text-[10px] font-bold text-slate-400 uppercase mb-1 block ml-1">Back</span>
-                                                                                <input className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium" placeholder="Answer/Definition" value={card.back} onChange={(e) => {
-                                                                                     const newUnits = [...mod.units];
-                                                                                     const newCards = [...(unit.flashcards || [])];
-                                                                                     newCards[cIdx] = { ...card, back: e.target.value };
-                                                                                     newUnits[idx] = { ...unit, flashcards: newCards };
-                                                                                     updateModule({...mod, units: newUnits});
-                                                                                }}/>
-                                                                            </div>
-                                                                            <button className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg mt-5 transition-colors" onClick={() => {
-                                                                                 const newUnits = [...mod.units];
-                                                                                 const newCards = (unit.flashcards || []).filter((_, i) => i !== cIdx);
-                                                                                 newUnits[idx] = { ...unit, flashcards: newCards };
-                                                                                 updateModule({...mod, units: newUnits});
-                                                                            }}><X size={18}/></button>
-                                                                        </div>
-                                                                    ))}
-                                                                    <Button size="sm" variant="secondary" onClick={() => {
-                                                                        const newUnits = [...mod.units];
-                                                                        const newCards = [...(unit.flashcards || []), { front: '', back: '' }];
-                                                                        newUnits[idx] = { ...unit, flashcards: newCards };
-                                                                        updateModule({...mod, units: newUnits});
-                                                                    }}>+ Add Flashcard</Button>
-                                                                </div>
-                                                            )}
-                                                            {unit.type === 'quiz' && (
-                                                                <div className="space-y-4">
-                                                                    <div>
-                                                                        <label className={labelClasses}>Quiz Question</label>
-                                                                        <input className={inputClasses} placeholder="Enter question..." value={unit.quiz?.question || ''} onChange={(e) => {
-                                                                            const newUnits = [...mod.units];
-                                                                            newUnits[idx] = { ...unit, quiz: { ...(unit.quiz || {options:['','',''], correctIndex:0}), question: e.target.value } as any };
-                                                                            updateModule({...mod, units: newUnits});
-                                                                        }}/>
-                                                                    </div>
-                                                                    <div>
-                                                                        <label className={labelClasses}>Options</label>
-                                                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                                                            {[0,1,2].map(i => (
-                                                                                <div key={i} className="relative">
-                                                                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-[#0057A0]">{String.fromCharCode(65+i)}</span>
-                                                                                    <input className={`${inputClasses} pl-8 py-2 text-sm`} placeholder={`Option`} value={unit.quiz?.options?.[i] || ''} onChange={(e) => {
-                                                                                        const newUnits = [...mod.units];
-                                                                                        const ops = [...(unit.quiz?.options || ['','',''])];
-                                                                                        ops[i] = e.target.value;
-                                                                                        newUnits[idx] = { ...unit, quiz: { ...(unit.quiz || {question:'', correctIndex:0}), options: ops } as any };
-                                                                                        updateModule({...mod, units: newUnits});
-                                                                                    }}/>
-                                                                                </div>
-                                                                            ))}
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="w-48">
-                                                                        <CustomSelect 
-                                                                            label="Correct Answer"
-                                                                            value={unit.quiz?.correctIndex || 0} 
-                                                                            options={[{ label: 'Option A', value: 0 }, { label: 'Option B', value: 1 }, { label: 'Option C', value: 2 }]} 
-                                                                            onChange={(val) => {
-                                                                                const newUnits = [...mod.units];
-                                                                                newUnits[idx] = { ...unit, quiz: { ...(unit.quiz || {question:'', options:['','','']}), correctIndex: parseInt(val) } as any };
-                                                                                updateModule({...mod, units: newUnits});
-                                                                            }}
-                                                                            zIndex={20}
-                                                                        />
-                                                                    </div>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                {/* Question List */}
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                        <span className="font-bold text-slate-500 text-sm">Total Questions: {filteredQuestions.length}</span>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto custom-scrollbar-blue">
+                        {filteredQuestions.map(q => (
+                            <div key={q.id} className="p-5 hover:bg-slate-50 transition group">
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex gap-2">
+                                        <span className="px-2 py-1 bg-blue-100 text-[#0057A0] text-[10px] font-bold uppercase rounded-lg">{q.category}</span>
+                                        <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[10px] font-bold uppercase rounded-lg">{q.difficulty}</span>
                                     </div>
-                                )}
+                                    <button onClick={() => handleDelete(q.id)} className="text-slate-300 hover:text-red-500 transition p-1"><Trash2 size={18}/></button>
+                                </div>
+                                <p className="font-bold text-slate-800 mb-2">{q.text}</p>
+                                <div className="flex items-center gap-2 text-sm text-slate-500">
+                                    <Check size={16} className="text-green-500"/>
+                                    <span className="font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded">{q.options[q.correctIndex]}</span>
+                                </div>
+                            </div>
+                        ))}
+                        {filteredQuestions.length === 0 && (
+                            <div className="p-10 text-center text-slate-400">No questions found matching your filters.</div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* COURSE EDITOR TAB */}
+        {activeTab === 'learn' && (
+            <div className="flex flex-col md:flex-row gap-6 h-[calc(100vh-140px)] animate-fade-in">
+                {/* Sidebar: Module List */}
+                <div className="w-full md:w-1/3 bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
+                    <div className="p-4 bg-[#0057A0] text-white flex justify-between items-center">
+                        <h3 className="font-bold">Learning Modules</h3>
+                        <button onClick={() => { setIsEditingModule('new'); setNewModule({category: Category.General, description: '', units: []}); }} className="bg-white/20 p-1.5 rounded-lg hover:bg-white/30 transition"><PlusCircle size={20}/></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar-blue p-2 space-y-2">
+                        {modules.map(m => (
+                            <div key={m.id} onClick={() => { setIsEditingModule(m.id); setNewModule(m); setEditingUnitId(null); }} className={`p-4 rounded-2xl cursor-pointer border transition-all ${isEditingModule === m.id ? 'bg-blue-50 border-blue-200 shadow-inner' : 'bg-white border-slate-100 hover:border-blue-200 shadow-sm'}`}>
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <p className="font-bold text-[#003D73]">{m.category}</p>
+                                        <p className="text-xs text-slate-500">{m.units.length} units</p>
+                                    </div>
+                                    <CategoryIcon category={m.category} size={20} />
+                                </div>
                             </div>
                         ))}
                     </div>
                 </div>
-            )}
-        </div>
+
+                {/* Editor Area */}
+                <div className="flex-1 bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col overflow-hidden relative">
+                    {!isEditingModule ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-slate-300 p-10 text-center">
+                            <BookOpen size={64} className="mb-4 opacity-20"/>
+                            <p className="font-bold text-lg">Select or create a module to begin editing</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col h-full">
+                            {/* Module Header Edit */}
+                            <div className="p-6 border-b border-slate-100 bg-slate-50">
+                                <div className="flex justify-between items-start mb-4">
+                                    <h3 className="text-[#0057A0] font-bold text-lg uppercase tracking-wide">Module Settings</h3>
+                                    <div className="flex gap-2">
+                                         {isEditingModule !== 'new' && <button onClick={() => handleDeleteModule(isEditingModule)} className="text-red-400 hover:text-red-600 p-2"><Trash2 size={20}/></button>}
+                                         <Button size="sm" onClick={handleSaveModule} className="bg-[#30C050] border-green-600">Save Module</Button>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                    <CustomSelect 
+                                        label="Category"
+                                        value={newModule.category || ''}
+                                        options={Object.values(Category).filter(c => c !== Category.General).map(c => ({ label: c, value: c }))}
+                                        onChange={v => setNewModule({...newModule, category: v})}
+                                    />
+                                    <div>
+                                        <label className="block text-xs font-bold text-[#0057A0] uppercase tracking-wider mb-2 ml-1">Description</label>
+                                        <input className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm focus:border-[#0057A0] outline-none" value={newModule.description} onChange={e => setNewModule({...newModule, description: e.target.value})} placeholder="Short description..."/>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Units List */}
+                            <div className="flex-1 overflow-y-auto custom-scrollbar-blue p-6 bg-slate-50/50">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h4 className="font-bold text-slate-700">Learning Path ({newModule.units?.length || 0} Steps)</h4>
+                                    <Button size="sm" variant="secondary" onClick={handleAddUnit}><PlusCircle size={16}/> Add Unit</Button>
+                                </div>
+                                
+                                <div className="space-y-4">
+                                    {newModule.units?.map((unit, idx) => (
+                                        <div key={unit.id} className={`bg-white border rounded-2xl overflow-hidden transition-all ${editingUnitId === unit.id ? 'border-[#0057A0] shadow-md ring-2 ring-blue-50' : 'border-slate-200 hover:border-blue-300'}`}>
+                                            {/* Unit Header */}
+                                            <div className="p-4 flex items-center justify-between cursor-pointer bg-white" onClick={() => setEditingUnitId(editingUnitId === unit.id ? null : unit.id)}>
+                                                <div className="flex items-center gap-4">
+                                                    <div className="bg-slate-100 text-slate-500 font-bold w-8 h-8 flex items-center justify-center rounded-lg">{idx + 1}</div>
+                                                    <div>
+                                                        <p className="font-bold text-slate-800">{unit.title}</p>
+                                                        <div className="flex gap-2 mt-1">
+                                                            <span className="text-[10px] font-bold uppercase bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{unit.type}</span>
+                                                            <span className="text-[10px] font-bold uppercase bg-slate-50 text-slate-500 px-2 py-0.5 rounded">{unit.duration}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1">
+                                                    <button onClick={(e) => { e.stopPropagation(); handleMoveUnit(idx, 'up'); }} disabled={idx === 0} className="p-1 text-slate-400 hover:text-[#0057A0] disabled:opacity-30"><ArrowUp size={18}/></button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleMoveUnit(idx, 'down'); }} disabled={idx === (newModule.units?.length || 0) - 1} className="p-1 text-slate-400 hover:text-[#0057A0] disabled:opacity-30"><ArrowDown size={18}/></button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteUnit(idx); }} className="p-1 text-slate-400 hover:text-red-500 ml-2"><Trash2 size={18}/></button>
+                                                    <ChevronDown size={20} className={`text-slate-300 transition-transform ${editingUnitId === unit.id ? 'rotate-180' : ''}`}/>
+                                                </div>
+                                            </div>
+
+                                            {/* Unit Editor Body */}
+                                            {editingUnitId === unit.id && (
+                                                <div className="p-4 border-t border-slate-100 bg-slate-50">
+                                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Title</label>
+                                                            <input className="w-full p-2 rounded-lg border border-slate-200 text-sm" value={unit.title} onChange={e => handleUpdateUnit(unit.id, {title: e.target.value})} />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Duration</label>
+                                                            <input className="w-full p-2 rounded-lg border border-slate-200 text-sm" value={unit.duration} onChange={e => handleUpdateUnit(unit.id, {duration: e.target.value})} />
+                                                        </div>
+                                                        <div className="col-span-2">
+                                                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Type</label>
+                                                            <div className="flex gap-2">
+                                                                {['text', 'flashcards', 'quiz'].map(t => (
+                                                                    <button key={t} onClick={() => handleUpdateUnit(unit.id, { type: t as any })} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase border ${unit.type === t ? 'bg-[#0057A0] text-white border-[#0057A0]' : 'bg-white text-slate-500 border-slate-200'}`}>{t}</button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Type Specific Editors */}
+                                                    {unit.type === 'text' && (
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Content Text</label>
+                                                            <textarea className="w-full p-3 rounded-lg border border-slate-200 text-sm h-32" value={unit.content || ''} onChange={e => handleUpdateUnit(unit.id, {content: e.target.value})} placeholder="Enter the educational text here..." />
+                                                        </div>
+                                                    )}
+
+                                                    {unit.type === 'flashcards' && (
+                                                        <div>
+                                                            <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Flashcards</label>
+                                                            <div className="space-y-2">
+                                                                {unit.flashcards?.map((fc, fcIdx) => (
+                                                                    <div key={fcIdx} className="flex gap-2 items-start">
+                                                                        <div className="flex-1 grid grid-cols-2 gap-2">
+                                                                            <input className="p-2 border rounded-lg text-xs" placeholder="Front" value={fc.front} onChange={e => {
+                                                                                const newCards = [...(unit.flashcards || [])];
+                                                                                newCards[fcIdx].front = e.target.value;
+                                                                                handleUpdateUnit(unit.id, {flashcards: newCards});
+                                                                            }} />
+                                                                            <input className="p-2 border rounded-lg text-xs" placeholder="Back" value={fc.back} onChange={e => {
+                                                                                const newCards = [...(unit.flashcards || [])];
+                                                                                newCards[fcIdx].back = e.target.value;
+                                                                                handleUpdateUnit(unit.id, {flashcards: newCards});
+                                                                            }} />
+                                                                        </div>
+                                                                        <button onClick={() => {
+                                                                            const newCards = unit.flashcards?.filter((_, i) => i !== fcIdx);
+                                                                            handleUpdateUnit(unit.id, {flashcards: newCards});
+                                                                        }} className="p-2 text-red-400 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
+                                                                    </div>
+                                                                ))}
+                                                                <button onClick={() => handleUpdateUnit(unit.id, { flashcards: [...(unit.flashcards || []), {front: '', back: ''}] })} className="text-xs font-bold text-[#0057A0] hover:underline">+ Add Flashcard</button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {unit.type === 'quiz' && (
+                                                        <div className="space-y-3">
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Question</label>
+                                                                <input className="w-full p-2 rounded-lg border border-slate-200 text-sm" value={unit.quiz?.question || ''} onChange={e => handleUpdateUnit(unit.id, { quiz: { ...unit.quiz, question: e.target.value } as any })} placeholder="Quiz Question..." />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Options (Select correct)</label>
+                                                                <div className="space-y-2">
+                                                                    {[0,1,2,3].map(oIdx => (
+                                                                        <div key={oIdx} className="flex gap-2">
+                                                                            <button onClick={() => handleUpdateUnit(unit.id, { quiz: { ...unit.quiz, correctIndex: oIdx } as any })} className={`w-6 h-6 rounded-full border flex items-center justify-center ${unit.quiz?.correctIndex === oIdx ? 'bg-green-500 border-green-500 text-white' : 'border-slate-300'}`}>
+                                                                                <Check size={12}/>
+                                                                            </button>
+                                                                            <input className="flex-1 p-2 border rounded-lg text-xs" placeholder={`Option ${oIdx+1}`} value={unit.quiz?.options?.[oIdx] || ''} onChange={e => {
+                                                                                const newOpts = [...(unit.quiz?.options || [])];
+                                                                                newOpts[oIdx] = e.target.value;
+                                                                                handleUpdateUnit(unit.id, { quiz: { ...unit.quiz, options: newOpts } as any });
+                                                                            }} />
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
+      </div>
     </div>
   );
 };
 
-const AdminAuth: React.FC<{ onSuccess: () => void, onBack: () => void }> = ({ onSuccess, onBack }) => {
-    const [pwd, setPwd] = useState('');
-    const [showPwd, setShowPwd] = useState(false);
-    const [error, setError] = useState(false);
-    const handleLogin = () => { if (pwd === 'perlan2025') onSuccess(); else { setError(true); setTimeout(() => setError(false), 2000); } };
-
-    return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-            <div className="bg-white rounded-3xl p-8 shadow-xl w-full max-w-sm animate-slide-up border border-blue-100">
-                <div className="text-center mb-8">
-                    <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4 text-[#0057A0] shadow-sm">
-                        <Lock size={32} />
-                    </div>
-                    <h2 className="text-2xl font-heading font-bold text-slate-800">Manager Access</h2>
-                    <p className="text-slate-500 text-sm mt-2">Please enter your password to continue</p>
-                </div>
-                <div className="relative mb-6">
-                    <input 
-                        type={showPwd ? "text" : "password"} 
-                        placeholder="Password" 
-                        className={`w-full bg-slate-50 border-2 px-4 py-3 rounded-xl text-lg focus:outline-none focus:border-[#0057A0] focus:bg-white transition placeholder:text-slate-400 text-slate-800 ${error ? 'border-red-500 bg-red-50' : 'border-slate-200'}`} 
-                        value={pwd} 
-                        onChange={e => setPwd(e.target.value)} 
-                        onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                    />
-                    <button onClick={() => setShowPwd(!showPwd)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#0057A0] transition-colors">
-                        {showPwd ? <EyeOff size={20}/> : <Eye size={20}/>}
-                    </button>
-                </div>
-                <Button fullWidth onClick={handleLogin} className="py-3 text-lg shadow-lg bg-[#0057A0] hover:bg-[#003D73]">Unlock Dashboard</Button>
-                <button onClick={onBack} className="w-full text-center text-slate-400 text-sm mt-6 hover:text-[#0057A0] font-medium transition-colors">Return to Game</button>
-            </div>
-        </div>
-    )
-}
+// --- MAIN APP ---
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'home' | 'game' | 'result' | 'adminAuth' | 'admin' | 'learning'>('home');
-  const [gameConfig, setGameConfig] = useState<GameConfig | null>(null);
-  const [lastResult, setLastResult] = useState<GameResult | null>(null);
-  const [playerName, setPlayerName] = useState(""); 
-  
-  // NEW: Sync State
-  const [isSyncing, setIsSyncing] = useState(true);
+  const [config, setConfig] = useState<GameConfig | null>(null);
+  const [gameResult, setGameResult] = useState<GameResult | null>(null);
+  const [view, setView] = useState<'auth' | 'home' | 'game' | 'result' | 'admin-auth' | 'admin' | 'learn'>('auth');
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // NEW: Trigger Sync on Load
   useEffect(() => {
-    const init = async () => {
-      await syncContentFromFirebase();
-      setIsSyncing(false);
-    };
-    init();
+    const unsubscribe = subscribeToAuthChanges((u) => {
+      setUser(u);
+      setAuthLoading(false);
+      if (u) setView('home');
+      else setView('auth');
+    });
+    return () => unsubscribe();
   }, []);
 
-  const startGame = (config: GameConfig) => { 
-    setPlayerName(config.username);
-    setGameConfig(config); 
-    setView('game'); 
-  };
-  const endGame = (result: GameResult) => { setLastResult(result); setView('result'); };
-  
-  const startLearning = () => {
-    setView('learning');
+  // Sync content on load
+  useEffect(() => {
+    syncContentFromFirebase();
+  }, []);
+
+  const handleStartGame = (cfg: GameConfig) => {
+    setConfig(cfg);
+    setView('game');
   };
 
-  if (isSyncing) {
-      return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-[#0057A0] text-white">
-              <Loader2 size={48} className="animate-spin text-yellow-400 mb-4"/>
-              <p className="font-heading font-bold text-lg">Syncing with Cloud...</p>
-          </div>
-      )
+  const handleGameEnd = (result: GameResult) => {
+    setGameResult(result);
+    setView('result');
+  };
+
+  const handleLogout = async () => {
+      await logoutUser();
+      setUser(null);
+      setView('auth');
+  };
+
+  if (authLoading) {
+      return <div className="min-h-screen flex items-center justify-center bg-[#0057A0] text-white"><Loader2 className="animate-spin" size={48}/></div>;
   }
 
   return (
-    <div className="font-sans bg-gradient-to-b from-slate-900 via-[#003D73] to-[#0057A0] min-h-screen text-slate-800 selection:bg-perlan-light selection:text-white">
-      {view === 'home' && <HomeScreen onStart={startGame} onAdmin={() => setView('adminAuth')} onLearning={startLearning} />}
-      {view === 'game' && gameConfig && <GameScreen config={gameConfig} onEnd={endGame} onBack={() => setView('home')} />}
-      {view === 'result' && lastResult && <ResultScreen result={lastResult} onHome={() => setView('home')} />}
-      {view === 'learning' && <LearningScreen onBack={() => setView('home')} username={playerName || "Staff Member"} />}
-      {view === 'adminAuth' && <AdminAuth onSuccess={() => setView('admin')} onBack={() => setView('home')} />}
-      {view === 'admin' && <AdminDashboard onLogout={() => setView('home')} />}
+    <div className="min-h-screen bg-gradient-to-br from-[#003D73] via-[#0057A0] to-[#3382C5] font-sans text-slate-900 overflow-x-hidden">
+       {view === 'auth' && <AuthScreen onLogin={(u) => { setUser(u); setView('home'); }} />}
+       
+       {view === 'home' && user && (
+         <HomeScreen 
+            user={user}
+            onStart={handleStartGame} 
+            onAdmin={() => setView('admin-auth')}
+            onLearning={() => setView('learn')}
+            onLogout={handleLogout}
+         />
+       )}
+
+       {view === 'game' && config && (
+         <GameScreen config={config} onEnd={handleGameEnd} />
+       )}
+
+       {view === 'result' && gameResult && (
+         <ResultScreen result={gameResult} onHome={() => setView('home')} />
+       )}
+
+       {view === 'admin-auth' && (
+         <AdminAuth onUnlock={() => setView('admin')} onBack={() => setView('home')} />
+       )}
+
+       {view === 'admin' && (
+         <AdminDashboard onLogout={handleLogout} />
+       )}
+
+       {view === 'learn' && (
+           <LearningScreen onBack={() => setView('home')} username={user?.displayName || 'User'} />
+       )}
     </div>
   );
 };

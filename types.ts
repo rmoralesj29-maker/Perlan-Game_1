@@ -63,6 +63,24 @@ export interface PlayerStats {
   lastPlayed: number;
 }
 
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  avatarId: string; // NEW: Stores the selected avatar ID
+  createdAt: number;
+  lastLogin: number;
+}
+
+// --- AVATARS CONFIG ---
+export const AVATARS = [
+  { id: 'puffin', icon: '🐧', label: 'Puffin', color: 'bg-slate-900' },
+  { id: 'bear', icon: '🐻‍❄️', label: 'Polar Bear', color: 'bg-blue-100' },
+  { id: 'whale', icon: '🐋', label: 'Whale', color: 'bg-blue-600' },
+  { id: 'fox', icon: '🦊', label: 'Arctic Fox', color: 'bg-orange-100' },
+  { id: 'cat', icon: '🐱', label: 'Cat', color: 'bg-yellow-100' }
+];
+
 // --- Learning Module Types ---
 
 export interface Flashcard {
