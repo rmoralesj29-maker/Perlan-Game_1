@@ -125,6 +125,12 @@ export const getAllUsers = async (): Promise<UserProfile[]> => {
   }
 }
 
+export const deleteUserProfile = async (uid: string): Promise<void> => {
+    try {
+        await deleteDoc(doc(db, "users", uid));
+    } catch (e) { console.error("Error deleting user profile", e); }
+};
+
 // --- Stats Management ---
 
 export const saveGameResult = async (result: GameResult): Promise<void> => {

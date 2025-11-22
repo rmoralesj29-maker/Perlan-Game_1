@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { Category, Difficulty, GameConfig, GameResult, Question, PlayerAnswer, PlayerStats, LearningModule, LearningUnit, UserProgress, Flashcard, LearningQuiz, UserProfile, AVATARS } from './types';
 import Button from './components/Button';
-import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules, deleteLearningModuleFromCloud, syncContentFromFirebase, getAllUsers } from './services/storageService';
+import { getQuestions, saveGameResult, getAllStats, addQuestion, deleteQuestion, getAllResults, getUserProgress, saveUserProgress, getLearningModules, saveLearningModules, deleteLearningModuleFromCloud, syncContentFromFirebase, getAllUsers, deleteUserProfile } from './services/storageService';
 import { generateQuestionsWithAI } from './services/geminiService';
 import { loginUser, registerUser, logoutUser, resetPassword, subscribeToAuthChanges } from './services/authService';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart as RePie, Pie } from 'recharts';
@@ -1024,6 +1024,7 @@ const ResultScreen: React.FC<{ result: GameResult, onHome: () => void }> = ({ re
 
 const AdminAuth: React.FC<{ onUnlock: () => void, onBack: () => void }> = ({ onUnlock, onBack }) => {
   const [pass, setPass] = useState('');
+  const [showPass, setShowPass] = useState(false);
   
   const checkPass = () => {
     if (pass === 'perlan2025') onUnlock();
@@ -1041,12 +1042,19 @@ const AdminAuth: React.FC<{ onUnlock: () => void, onBack: () => void }> = ({ onU
         
         <div className="relative mb-6">
             <input 
-                type="password" 
+                type={showPass ? "text" : "password"}
                 value={pass} 
                 onChange={e => setPass(e.target.value)}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-lg text-center font-bold text-slate-800 focus:outline-none focus:border-[#0057A0] focus:ring-4 focus:ring-blue-50 transition-all"
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-lg text-center font-bold text-slate-800 focus:outline-none focus:border-[#0057A0] focus:ring-4 focus:ring-blue-50 transition-all pr-12"
                 placeholder="Password"
             />
+            <button 
+                type="button"
+                onClick={() => setShowPass(!showPass)} 
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#0057A0] transition-colors"
+            >
+                {showPass ? <EyeOff size={20}/> : <Eye size={20}/>}
+            </button>
         </div>
         
         <Button onClick={checkPass} fullWidth className="shadow-lg">Unlock Dashboard</Button>
@@ -1056,7 +1064,7 @@ const AdminAuth: React.FC<{ onUnlock: () => void, onBack: () => void }> = ({ onU
   );
 };
 
-const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+const AdminDashboard: React.FC<{ onExit: () => void }> = ({ onExit }) => {
   const [stats, setStats] = useState<PlayerStats[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'questions' | 'learn' | 'users'>('overview');
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -1152,6 +1160,15 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
   };
 
+  const handleUserDelete = async (uid: string) => {
+      if(window.confirm("Are you sure you want to remove this user from the list?")) {
+          await deleteUserProfile(uid);
+          // Refresh list
+          const u = await getAllUsers();
+          setUsers(u);
+      }
+  };
+
   // --- Course Editor Handlers ---
   const handleSaveModule = async () => {
       if (!newModule.category || !newModule.description) return;
@@ -1224,7 +1241,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 <div className="bg-[#0057A0] p-2 rounded-lg text-white"><Settings size={24} /></div>
                 <h1 className="text-xl font-heading font-bold text-slate-800">Manager Board</h1>
             </div>
-            <button onClick={onLogout} className="text-sm font-bold text-slate-500 hover:text-[#0057A0]">Log Out</button>
+            <button onClick={onExit} className="text-sm font-bold text-slate-500 hover:text-[#0057A0]">Exit Manager</button>
          </div>
          
          {/* Tabs */}
@@ -1318,6 +1335,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             <th className="px-6 py-3">Email</th>
                             <th className="px-6 py-3">Joined</th>
                             <th className="px-6 py-3">Last Login</th>
+                            <th className="px-6 py-3">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="font-medium text-slate-600">
@@ -1328,6 +1346,11 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <td className="px-6 py-4">{u.email}</td>
                                 <td className="px-6 py-4">{new Date(u.createdAt).toLocaleDateString()}</td>
                                 <td className="px-6 py-4">{new Date(u.lastLogin).toLocaleDateString()}</td>
+                                <td className="px-6 py-4">
+                                    <button onClick={() => handleUserDelete(u.uid)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition" title="Remove User">
+                                        <Trash2 size={18} />
+                                    </button>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
@@ -1340,7 +1363,7 @@ const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <div className="space-y-6 animate-fade-in">
                 {/* AI Generator */}
                 <div className="bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl p-8 text-white relative overflow-hidden shadow-lg z-30">
-                    <div className="absolute top-0 right-0 p-8 opacity-10"><BrainCircuit size={120}/></div>
+                    <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><BrainCircuit size={120}/></div>
                     <h3 className="text-2xl font-heading font-bold mb-2 relative z-10">AI Question Generator</h3>
                     <p className="text-blue-200 mb-6 relative z-10 max-w-lg">Instantly generate scientifically accurate trivia questions for any category using Gemini AI.</p>
                     
@@ -1723,7 +1746,7 @@ const App: React.FC = () => {
        )}
 
        {view === 'admin' && (
-         <AdminDashboard onLogout={handleLogout} />
+         <AdminDashboard onExit={() => setView('home')} />
        )}
 
        {view === 'learn' && (
