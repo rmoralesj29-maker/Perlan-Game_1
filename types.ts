@@ -1,3 +1,4 @@
+
 export enum Category {
   General = 'General',
   NorthernLights = 'Northern Lights',
@@ -60,4 +61,39 @@ export interface PlayerStats {
   bestCategory: Category | null;
   streakRecord: number;
   lastPlayed: number;
+}
+
+// --- Learning Module Types ---
+
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+
+export interface LearningQuiz {
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
+export interface LearningUnit {
+  id: string;
+  title: string;
+  duration: string; // e.g., "2 min"
+  type: 'text' | 'flashcards' | 'quiz';
+  content?: string; // For text type
+  flashcards?: Flashcard[]; // For flashcards type
+  quiz?: LearningQuiz; // For quiz type
+}
+
+export interface LearningModule {
+  id: string;
+  category: Category;
+  description: string;
+  units: LearningUnit[];
+}
+
+export interface UserProgress {
+  username: string;
+  completedUnitIds: string[]; // List of IDs of units the user has finished
 }
