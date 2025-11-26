@@ -1129,10 +1129,11 @@ const AdminDashboard: React.FC<{ onExit: () => void }> = ({ onExit }) => {
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm("Delete this question?")) {
-      await deleteQuestion(id);
-      setQuestions(getQuestions());
-    }
+    // Removed window.confirm for instant delete as requested
+    // Optimistic Update: Remove immediately from UI
+    setQuestions(prev => prev.filter(q => q.id !== id));
+    // Delete from Cloud in background
+    await deleteQuestion(id);
   };
 
   const handleSaveNew = async () => {
@@ -1364,8 +1365,8 @@ const AdminDashboard: React.FC<{ onExit: () => void }> = ({ onExit }) => {
                 {/* AI Generator */}
                 <div className="relative z-30 rounded-3xl shadow-lg">
                     {/* Decoration Layer (Clipped) */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl overflow-hidden">
-                        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><BrainCircuit size={120}/></div>
+                    <div className="absolute inset-0 bg-gradient-to-br from-[#0057A0] to-[#003D73] rounded-3xl overflow-hidden pointer-events-none">
+                        <div className="absolute top-0 right-0 p-8 opacity-10"><BrainCircuit size={120}/></div>
                     </div>
                     
                     {/* Content Layer (Visible overflow for dropdowns) */}
@@ -1479,7 +1480,7 @@ const AdminDashboard: React.FC<{ onExit: () => void }> = ({ onExit }) => {
                                         <span className="px-2 py-1 bg-blue-100 text-[#0057A0] text-[10px] font-bold uppercase rounded-lg">{q.category}</span>
                                         <span className="px-2 py-1 bg-slate-100 text-slate-500 text-[10px] font-bold uppercase rounded-lg">{q.difficulty}</span>
                                     </div>
-                                    <button onClick={() => handleDelete(q.id)} className="text-slate-300 hover:text-red-500 transition p-1"><Trash2 size={18}/></button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(q.id); }} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition cursor-pointer z-10 relative"><Trash2 size={24}/></button>
                                 </div>
                                 <p className="font-bold text-slate-800 mb-2">{q.text}</p>
                                 <div className="flex items-center gap-2 text-sm text-slate-500">
