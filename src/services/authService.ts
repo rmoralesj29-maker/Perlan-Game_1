@@ -40,7 +40,7 @@ export const registerUser = async (email: string, pass: string, name: string, av
     return user;
   } catch (error: any) {
     console.error("Registration Error:", error);
-    throw new Error(getFriendlyErrorMessage(error.code));
+    throw new Error(getFriendlyErrorMessage((error as { code?: string }).code || 'unknown'));
   }
 };
 
@@ -51,7 +51,7 @@ export const loginUser = async (email: string, pass: string) => {
     return userCredential.user;
   } catch (error: any) {
     console.error("Login Error:", error);
-    throw new Error(getFriendlyErrorMessage(error.code));
+    throw new Error(getFriendlyErrorMessage((error as { code?: string }).code || 'unknown'));
   }
 };
 
@@ -70,7 +70,7 @@ export const resetPassword = async (email: string) => {
     await sendPasswordResetEmail(auth, email);
   } catch (error: any) {
     console.error("Reset Password Error:", error);
-    throw new Error(getFriendlyErrorMessage(error.code));
+    throw new Error(getFriendlyErrorMessage((error as { code?: string }).code || 'unknown'));
   }
 };
 
