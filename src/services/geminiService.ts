@@ -9,10 +9,10 @@ export const generateQuestionsWithAI = async (
   count: number = 5
 ): Promise<Question[]> => {
   
-  // API Key must be obtained exclusively from process.env.API_KEY
-  const apiKey = process.env.API_KEY;
+  // Use import.meta.env for Vite
+  const apiKey = import.meta.env.VITE_API_KEY;
   if (!apiKey) {
-    throw new Error("process.env.API_KEY is not defined");
+    throw new Error("VITE_API_KEY is not defined");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -64,9 +64,15 @@ export const generateQuestionsWithAI = async (
 
     const rawData = JSON.parse(response.text || "[]");
 
+    interface RawQuestion {
+        text: string;
+        options: string[];
+        correctIndex: number;
+        fact: string;
+    }
+
     // Map to our Question interface
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return rawData.map((q: any) => ({
+    return rawData.map((q: RawQuestion) => ({
       id: uuidv4(),
       category,
       difficulty,
